@@ -28,7 +28,7 @@
 // Font tables (same sizes as FZ Bible)
 // ============================================================
 
-static const uint8_t FONT_CHARS[FONT_COUNT]  = { 22, 30, 24, 20, 13 };
+static const uint8_t FONT_CHARS[FONT_COUNT]  = { 18, 30, 24, 20, 13 };
 static const uint8_t FONT_LINE_H[FONT_COUNT] = { 10,  8, 10, 12, 16 };
 static const char* const FONT_LABELS[FONT_COUNT] = {
     "Default (built-in)",
