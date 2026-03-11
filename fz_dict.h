@@ -47,7 +47,7 @@
 #define KB_NROWS          3
 #define KB_NCOLS         13
 #define MAX_SEARCH_LEN   64
-#define MAX_SEARCH_HITS  30
+#define MAX_SEARCH_HITS 100
 
 #define KEYWORDS_PATH_DICT  DATA_DIR "/keywords.txt"
 #define MAX_KEYWORDS    200
@@ -144,6 +144,7 @@ typedef struct App {
     uint8_t cursor_pos;
     uint8_t text_scroll;
     uint8_t cursor_blink;
+    uint8_t list_tick;    // free-running frame counter for list row marquee scrolling
     bool    bm_naming;  // always false in dict app; kept for keyboard.c compatibility
 
     // Keyword suggestions
@@ -184,6 +185,8 @@ typedef struct App {
     uint8_t fav_count;
     uint8_t fav_sel;
     uint8_t fav_scroll;
+    bool    fav_confirm_delete;  // true while waiting for confirm on remove-one
+    bool    fav_long_consumed;
 
     // Search history
     char    history[MAX_HISTORY][HISTORY_TERM_LEN];
@@ -191,6 +194,7 @@ typedef struct App {
     uint8_t hist_sel;
     uint8_t hist_scroll;
     bool    hist_confirm_clear;   // true while waiting for confirm on clear-all
+    bool    hist_confirm_delete;  // true while waiting for confirm on delete-one
     bool    hist_long_consumed;
 
     // Settings view state
@@ -217,5 +221,7 @@ void history_add(App* app);
 void history_load(App* app);
 void open_entry(App* app);
 void keywords_load(App* app);
+void apply_font(Canvas* canvas, FontChoice f);
+void truncate_utf8_display(const char* src, char* dst, size_t dst_size, uint8_t max_chars);
 void suggestions_update(App* app);
 void suggestion_fill(App* app);

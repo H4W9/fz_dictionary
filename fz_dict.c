@@ -55,7 +55,7 @@ void set_fg(Canvas* canvas, App* app) {
 // Font helpers
 // ============================================================
 
-static void apply_font(Canvas* canvas, FontChoice f) {
+void apply_font(Canvas* canvas, FontChoice f) {
     switch(f) {
     case FontSmall:  canvas_set_font_custom(canvas, FONT_SIZE_SMALL);  break;
     case FontMedium: canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM); break;
@@ -469,7 +469,7 @@ static bool icontains_ascii(const char* hay, const char* needle) {
 }
 
 // Truncate a display string to max_chars visible characters (UTF-8 aware)
-static void truncate_utf8_display(const char* src, char* dst, size_t dst_size, uint8_t max_chars) {
+void truncate_utf8_display(const char* src, char* dst, size_t dst_size, uint8_t max_chars) {
     size_t si = 0, di = 0;
     uint8_t chars = 0;
     while(src[si] && chars < max_chars && di < dst_size - 4) {
@@ -517,9 +517,8 @@ static void process_search_line(App* app, const char* line, uint32_t offset) {
     // Build the display ref shown in the results list:
     // "word_truncated" on the left; fits in ~20 chars of FontSecondary on 128px screen.
     // Format: source word (max 18 chars) so there's room to read it
-    char word_short[24];
-    truncate_utf8_display(app->hits[hi].word, word_short, sizeof(word_short), 18);
-    snprintf(app->hits[hi].ref, HIT_REF_LEN, "%s", word_short);
+    strncpy(app->hits[hi].ref, app->hits[hi].word, HIT_REF_LEN - 1);
+    app->hits[hi].ref[HIT_REF_LEN - 1] = '\0';
 
     app->hit_count++;
 }
@@ -1134,20 +1133,129 @@ static void draw_settings(Canvas* canvas, App* app) {
 }
 
 // ============================================================
+// List-row marquee scrolling (ported from luther1912)
+// ============================================================
+
+static uint8_t utf8_char_count(const char* s) {
+    uint8_t n = 0;
+    while(*s) {
+        if(((uint8_t)*s & 0xC0) != 0x80) n++;
+        s++;
+    }
+    return n;
+}
+
+// Fills out[] with a max_vis-character window into src, driven by tick.
+// Pauses at start/end, then steps one glyph per STEP_FRAMES.
+// Returns true when the string is wider than the window (i.e. scrolling active).
+static bool str_marquee_sub(const char* src, uint8_t char_count,
+                             uint8_t max_vis, uint8_t tick,
+                             char* out, uint8_t out_size) {
+    if(char_count <= max_vis || max_vis == 0) {
+        uint8_t i = 0;
+        while(src[i] && i < out_size - 1) { out[i] = src[i]; i++; }
+        out[i] = '\0';
+        return false;
+    }
+
+    const uint8_t  scroll_range = (uint8_t)(char_count - max_vis);
+    const uint8_t  PAUSE_FRAMES = 20;
+    const uint8_t  STEP_FRAMES  = 6;
+    const uint16_t cycle_len    = (uint16_t)(PAUSE_FRAMES +
+                                   (uint16_t)scroll_range * STEP_FRAMES +
+                                   PAUSE_FRAMES);
+
+    uint16_t phase = (uint16_t)(tick % cycle_len);
+    uint8_t  char_off;
+    if(phase < PAUSE_FRAMES) {
+        char_off = 0;
+    } else if(phase < (uint16_t)(PAUSE_FRAMES + (uint16_t)scroll_range * STEP_FRAMES)) {
+        char_off = (uint8_t)((phase - PAUSE_FRAMES) / STEP_FRAMES);
+    } else {
+        char_off = scroll_range;
+    }
+
+    // Advance past char_off UTF-8 glyphs
+    uint8_t si = 0, skipped = 0;
+    while(src[si] && skipped < char_off) {
+        si++;
+        while(src[si] && ((uint8_t)src[si] & 0xC0) == 0x80) si++;
+        skipped++;
+    }
+    // Copy max_vis glyphs
+    uint8_t di = 0, dc = 0;
+    while(src[si] && dc < max_vis && di < (uint8_t)(out_size - 4)) {
+        out[di++] = src[si++];
+        while(src[si] && ((uint8_t)src[si] & 0xC0) == 0x80 &&
+              di < (uint8_t)(out_size - 1))
+            out[di++] = src[si++];
+        dc++;
+    }
+    out[di] = '\0';
+    return true;
+}
+
+// ============================================================
+// Shared: confirm pop-up window (drawn on top of the current view)
+// ============================================================
+
+// Popup style matches luther1912: drop shadow, white fill, single frame,
+// solid black header bar with white title text, body text below.
+static void draw_confirm_popup(Canvas* canvas, const char* title,
+                               const char* body, const char* hint) {
+    const uint8_t BOX_X  = 2;
+    const uint8_t BOX_W  = SCREEN_W - 4;   // 124 px
+    const uint8_t BOX_H  = 38;
+    const uint8_t BOX_Y  = (SCREEN_H - BOX_H) / 2 - 1;
+    const uint8_t HDR_HT = 11;
+
+    // Shadow
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_box(canvas, BOX_X + 2, BOX_Y + 2, BOX_W, BOX_H);
+    // White fill
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_box(canvas, BOX_X, BOX_Y, BOX_W, BOX_H);
+    // Outer frame
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_frame(canvas, BOX_X, BOX_Y, BOX_W, BOX_H);
+    // Header bar
+    canvas_draw_box(canvas, BOX_X, BOX_Y, BOX_W, HDR_HT);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, SCREEN_W / 2, BOX_Y + 1,
+                            AlignCenter, AlignTop, title);
+    // Body text
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_str_aligned(canvas, SCREEN_W / 2, BOX_Y + HDR_HT + 9,
+                            AlignCenter, AlignBottom, body);
+    // Hint text
+    canvas_draw_str_aligned(canvas, SCREEN_W / 2, BOX_Y + BOX_H - 2,
+                            AlignCenter, AlignBottom, hint);
+}
+
+// ============================================================
 // Scene: Favorites list
 // ============================================================
 
 static void draw_favorites(Canvas* canvas, App* app) {
-    if(app->dark_mode) {
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
-    }
-
     char hdr_buf[24];
     if(app->fav_count == 0)
         snprintf(hdr_buf, sizeof(hdr_buf), "Favorites");
     else
         snprintf(hdr_buf, sizeof(hdr_buf), "Favorites (%d)", (int)app->fav_count);
+
+    // Popup path: clean white canvas, header, popup — mirrors luther1912 separate-view pattern
+    if(app->fav_confirm_delete) {
+        canvas_clear(canvas);
+        draw_hdr(canvas, hdr_buf);
+        draw_confirm_popup(canvas, "Remove Favorite", "Remove this entry?", "OK=yes  Back=cancel");
+        return;
+    }
+
+    if(app->dark_mode) {
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
+    }
     draw_hdr(canvas, hdr_buf);
 
     set_fg(canvas, app);
@@ -1161,8 +1269,11 @@ static void draw_favorites(Canvas* canvas, App* app) {
         return;
     }
 
-    const uint8_t LINE_H = 10;
-    const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+    app->list_tick++;
+
+    const uint8_t LINE_H  = 10;
+    const uint8_t MAX_VIS = 19;   // FontSecondary ~6px/char, 118px body → 19 chars
+    const uint8_t vis     = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
     if(app->fav_sel < app->fav_scroll)
         app->fav_scroll = app->fav_sel;
@@ -1182,8 +1293,14 @@ static void draw_favorites(Canvas* canvas, App* app) {
             canvas_set_color(canvas, ColorBlack);
         }
 
-        char disp[24];
-        truncate_utf8_display(app->favorites[si].word, disp, sizeof(disp), 18);
+        const char* word = app->favorites[si].word;
+        char disp[FAV_WORD_LEN + 1];
+        if(sel) {
+            uint8_t cc = utf8_char_count(word);
+            str_marquee_sub(word, cc, MAX_VIS, app->list_tick, disp, sizeof(disp));
+        } else {
+            truncate_utf8_display(word, disp, sizeof(disp), MAX_VIS);
+        }
         set_ui_font(canvas, disp);
         canvas_draw_str(canvas, 4, y + 8, disp);
         canvas_set_font(canvas, FontSecondary);
@@ -1198,29 +1315,34 @@ static void draw_favorites(Canvas* canvas, App* app) {
 // ============================================================
 
 static void draw_history(Canvas* canvas, App* app) {
-    if(app->dark_mode) {
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
-    }
-
     char hdr_buf[28];
     if(app->hist_count == 0)
         snprintf(hdr_buf, sizeof(hdr_buf), "History");
     else
         snprintf(hdr_buf, sizeof(hdr_buf), "History (%d)", (int)app->hist_count);
+
+    // Popup path: clean white canvas, header, popup — mirrors luther1912 separate-view pattern
+    if(app->hist_confirm_delete) {
+        canvas_clear(canvas);
+        draw_hdr(canvas, hdr_buf);
+        draw_confirm_popup(canvas, "Delete Entry", "Delete this entry?", "OK=yes  Back=cancel");
+        return;
+    }
+    if(app->hist_confirm_clear) {
+        canvas_clear(canvas);
+        draw_hdr(canvas, hdr_buf);
+        draw_confirm_popup(canvas, "Clear History", "Clear all history?", "OK=yes  Back=cancel");
+        return;
+    }
+
+    if(app->dark_mode) {
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
+    }
     draw_hdr(canvas, hdr_buf);
 
     set_fg(canvas, app);
     canvas_set_font(canvas, FontSecondary);
-
-    // Confirm-clear overlay
-    if(app->hist_confirm_clear) {
-        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 28,
-                                AlignCenter, AlignCenter, "Clear all history?");
-        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 42,
-                                AlignCenter, AlignCenter, "OK=confirm  Back=cancel");
-        return;
-    }
 
     if(app->hist_count == 0) {
         canvas_draw_str_aligned(canvas, SCREEN_W / 2, 34,
@@ -1230,8 +1352,11 @@ static void draw_history(Canvas* canvas, App* app) {
         return;
     }
 
-    const uint8_t LINE_H = 10;
-    const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+    app->list_tick++;
+
+    const uint8_t LINE_H  = 10;
+    const uint8_t MAX_VIS = 19;   // FontSecondary ~6px/char, 118px body → 19 chars
+    const uint8_t vis     = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
     if(app->hist_sel < app->hist_scroll)
         app->hist_scroll = app->hist_sel;
@@ -1251,8 +1376,14 @@ static void draw_history(Canvas* canvas, App* app) {
             canvas_set_color(canvas, ColorBlack);
         }
 
-        char disp[24];
-        truncate_utf8_display(app->history[si], disp, sizeof(disp), 18);
+        const char* term = app->history[si];
+        char disp[HISTORY_TERM_LEN + 1];
+        if(sel) {
+            uint8_t cc = utf8_char_count(term);
+            str_marquee_sub(term, cc, MAX_VIS, app->list_tick, disp, sizeof(disp));
+        } else {
+            truncate_utf8_display(term, disp, sizeof(disp), MAX_VIS);
+        }
         set_ui_font(canvas, disp);
         canvas_draw_str(canvas, 4, y + 8, disp);
         canvas_set_font(canvas, FontSecondary);
@@ -1269,6 +1400,27 @@ static void draw_history(Canvas* canvas, App* app) {
 static void on_history(App* app, InputEvent* ev) {
     const uint8_t LINE_H = 10;
     const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+
+    // ── Confirm-delete-one overlay active ────────────────────────────────
+    if(app->hist_confirm_delete) {
+        if(ev->type == InputTypeShort) {
+            if(ev->key == InputKeyOk) {
+                uint8_t hi = app->hist_sel;
+                for(uint8_t i = hi; i + 1 < app->hist_count; i++)
+                    memcpy(app->history[i], app->history[i + 1], HISTORY_TERM_LEN);
+                app->hist_count--;
+                if(app->hist_sel >= app->hist_count && app->hist_count > 0)
+                    app->hist_sel = app->hist_count - 1;
+                history_save(app);
+                app->hist_confirm_delete = false;
+                app->hist_long_consumed  = false;  // release was swallowed by overlay
+            } else if(ev->key == InputKeyBack) {
+                app->hist_confirm_delete = false;
+                app->hist_long_consumed  = false;  // release was swallowed by overlay
+            }
+        }
+        return;
+    }
 
     // ── Confirm-clear overlay active ─────────────────────────────────────
     if(app->hist_confirm_clear) {
@@ -1287,17 +1439,11 @@ static void on_history(App* app, InputEvent* ev) {
         return;
     }
 
-    // ── Long-OK: delete selected entry ───────────────────────────────────
+    // ── Long-OK: confirm before deleting selected entry ───────────────────
     if(ev->type == InputTypeLong && ev->key == InputKeyOk) {
         if(app->hist_long_consumed) return;
         if(app->hist_count == 0) { app->hist_long_consumed = true; return; }
-        uint8_t hi = app->hist_sel;
-        for(uint8_t i = hi; i + 1 < app->hist_count; i++)
-            memcpy(app->history[i], app->history[i + 1], HISTORY_TERM_LEN);
-        app->hist_count--;
-        if(app->hist_sel >= app->hist_count && app->hist_count > 0)
-            app->hist_sel = app->hist_count - 1;
-        history_save(app);
+        app->hist_confirm_delete = true;
         app->hist_long_consumed = true;
         return;
     }
@@ -1589,14 +1735,17 @@ static void on_menu(App* app, InputEvent* ev) {
             app->view = ViewSearch;
             break;
         case RowFavorites:
-            app->fav_sel    = 0;
-            app->fav_scroll = 0;
+            app->fav_sel            = 0;
+            app->fav_scroll         = 0;
+            app->fav_confirm_delete = false;
+            app->fav_long_consumed  = false;
             app->view = ViewFavorites;
             break;
         case RowHistory:
             app->hist_sel            = 0;
             app->hist_scroll         = 0;
             app->hist_confirm_clear  = false;
+            app->hist_confirm_delete = false;
             app->hist_long_consumed  = false;
             app->view = ViewHistory;
             break;
@@ -1834,19 +1983,40 @@ static void on_favorites(App* app, InputEvent* ev) {
     const uint8_t LINE_H = 10;
     const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
-    // Long-press OK: remove from favorites
-    if(ev->type == InputTypeLong && ev->key == InputKeyOk) {
-        if(app->fav_count == 0) return;
-        uint8_t fi = app->fav_sel;
-        // Remove entry fi
-        for(uint8_t i = fi; i + 1 < app->fav_count; i++)
-            app->favorites[i] = app->favorites[i + 1];
-        app->fav_count--;
-        if(app->fav_sel >= app->fav_count && app->fav_count > 0)
-            app->fav_sel = app->fav_count - 1;
-        favorites_save(app);
+    // ── Confirm-remove overlay active ────────────────────────────────────
+    if(app->fav_confirm_delete) {
+        if(ev->type == InputTypeShort) {
+            if(ev->key == InputKeyOk) {
+                uint8_t fi = app->fav_sel;
+                for(uint8_t i = fi; i + 1 < app->fav_count; i++)
+                    app->favorites[i] = app->favorites[i + 1];
+                app->fav_count--;
+                if(app->fav_sel >= app->fav_count && app->fav_count > 0)
+                    app->fav_sel = app->fav_count - 1;
+                favorites_save(app);
+                app->fav_confirm_delete = false;
+                app->fav_long_consumed  = false;  // release was swallowed by overlay
+            } else if(ev->key == InputKeyBack) {
+                app->fav_confirm_delete = false;
+                app->fav_long_consumed  = false;  // release was swallowed by overlay
+            }
+        }
         return;
     }
+
+    // ── Long-OK: confirm before removing selected entry ───────────────────
+    if(ev->type == InputTypeLong && ev->key == InputKeyOk) {
+        if(app->fav_long_consumed) return;
+        if(app->fav_count == 0) { app->fav_long_consumed = true; return; }
+        app->fav_confirm_delete = true;
+        app->fav_long_consumed  = true;
+        return;
+    }
+    if(ev->type == InputTypeRelease && ev->key == InputKeyOk) {
+        app->fav_long_consumed = false;
+        return;
+    }
+    if(app->fav_long_consumed) return;
 
     if(ev->type != InputTypeShort && ev->type != InputTypeRepeat) return;
 

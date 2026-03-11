@@ -275,8 +275,20 @@ void draw_search_results(Canvas* canvas, App* app) {
             canvas_set_color(canvas, ColorBlack);
         }
 
-        set_ui_font(canvas, app->hits[si].ref);
-        canvas_draw_str(canvas, 4, y + 8, app->hits[si].ref);
+        // Truncate at draw time so every font fits within 118px of usable width.
+        // Available: 128 - 4(left) - 3(SB) - 2(gap) - 1(safety) = 118px
+        // FONT_COUNT limits: proportional≈14, 4x6=29, 5x8=23, 6x10=19, 9x15=13
+        static const uint8_t RES_CHARS[FONT_COUNT] = { 14, 29, 23, 19, 13 };
+        char disp[HIT_REF_LEN];
+        if(str_has_umlaut(app->hits[si].ref)) {
+            canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM);
+            truncate_utf8_display(app->hits[si].ref, disp, sizeof(disp), 23);
+        } else {
+            apply_font(canvas, app->font_choice);
+            truncate_utf8_display(app->hits[si].ref, disp, sizeof(disp),
+                                  RES_CHARS[app->font_choice]);
+        }
+        canvas_draw_str(canvas, 4, y + 8, disp);
         canvas_set_font(canvas, FontSecondary);
         canvas_set_color(canvas, ColorBlack);
     }
