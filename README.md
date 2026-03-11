@@ -2,6 +2,22 @@
 
 A dict.cc dictionary viewer for Flipper Zero — built in the same style as the FZ Bible App.
 
+---
+
+<img width=19% height=19% alt="main_menu" src="https://github.com/user-attachments/assets/94800bd9-a671-4fbb-b91a-a5f7848d2ef3" />
+
+<img width=19% height=19% alt="settings" src="https://github.com/user-attachments/assets/162a3cab-18a9-44f2-bb43-3724db0d279a" />
+
+<img width=19% height=19% alt="search" src="https://github.com/user-attachments/assets/9327e272-8f42-4ef0-8cc4-ae5f01bf7866" />
+
+<img width=19% height=19% alt="search_results" src="https://github.com/user-attachments/assets/784483a5-5c44-4da1-b831-c74ad56345aa" />
+
+<img width=19% height=19% alt="word_view" src="https://github.com/user-attachments/assets/69c1b767-8ff5-4953-896f-dad6a29d3bc9" />
+
+
+---
+
+
 ## Features
 
 - **Search** any word in your dict.cc dictionary with a full on-screen keyboard
