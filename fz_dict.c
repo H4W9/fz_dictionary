@@ -1493,6 +1493,7 @@ static void draw_cb(Canvas* canvas, void* ctx) {
     case ViewEntry:         draw_entry(canvas, app);   break;
     case ViewSettings:      draw_settings(canvas, app); break;
     case ViewFavorites:     draw_favorites(canvas, app); break;
+    case ViewHistory:       draw_history(canvas, app);  break;
     case ViewAbout:         draw_about(canvas, app);   break;
     case ViewLoading:       draw_loading(canvas, app); break;
     case ViewError:         draw_error(canvas, app);   break;
