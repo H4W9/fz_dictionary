@@ -1,0 +1,179 @@
+# FZ Dictionary
+
+A dict.cc dictionary viewer for Flipper Zero — built in the same style as the FZ Bible App.
+
+## Features
+
+- **Search** any word in your dict.cc dictionary with a full on-screen keyboard
+- **Fast letter-indexed search** — the dictionary is split by first letter, so only 1/26th of the file is read per search
+- **Multiple dictionaries** — place multiple language folders in the data directory; switch between them in Settings or from the main menu
+- **Favorites** — long-press OK in the entry view to star any entry; view starred entries from the main menu
+- **Font system**: 5 selectable font sizes (Default, Tiny, Small, Medium, Large)
+- **Dark mode** toggle
+- **Keyword suggestions** while typing (load `keywords.txt` on SD card for custom suggestions)
+- **Scrollable entry view** — full translation text with word-wrap
+- **Navigate results** with Left/Right in the entry view
+
+---
+
+## Getting the Dictionary File
+
+The app uses dictionary exports from [dict.cc](https://www.dict.cc/). You need to download the file yourself — it requires a free account and agreement to their non-commercial terms.
+
+1. Go to **https://www1.dict.cc/translation_file_request.php**
+2. Register a free account (or log in if you already have one)
+3. Agree to the non-commercial use terms
+4. Select your desired language pair (e.g. English–German)
+5. Download the `.txt` file to your computer
+
+The downloaded file is a plain-text, tab-separated export — this is exactly what the prep script expects.
+
+---
+
+## SD Card Setup
+
+The app expects dictionaries as **folders of letter-bucket files**, not a single large file. Use the included `prepare_dict.py` script to convert your download.
+
+### Step 1 — Convert the dict.cc file
+
+```bash
+# In the sd_prep/ directory:
+python3 prepare_dict.py split EN-DE.txt
+
+# Or give the output folder a custom name:
+python3 prepare_dict.py split EN-DE.txt --name EN-DE
+
+# Preview stats without writing anything:
+python3 prepare_dict.py stats EN-DE.txt
+```
+
+This creates a folder like:
+
+```
+EN-DE/
+  a.txt   <- all entries whose source word starts with A or a
+  b.txt
+  ...
+  z.txt
+  0.txt   <- entries starting with a digit (0-9)
+  _.txt   <- entries starting with any other character
+```
+
+### Step 2 — Copy to Flipper Zero SD card
+
+```
+/ext/apps_data/fz_dict_app/
+  EN-DE/          <- your converted dictionary folder
+    a.txt
+    b.txt
+    ...
+  DE-EN/          <- optional: second dictionary (repeat step 1)
+    a.txt
+    ...
+  keywords.txt    <- optional: one word per line for typing suggestions
+```
+
+You can have up to 8 dictionary folders. Switch between them using Left/Right on the Search row in the main menu, or via Settings.
+
+### Why letter buckets?
+
+A full dict.cc export is typically 20–40 MB. Searching linearly through that on Flipper Zero hardware would take 15–30 seconds per query. Splitting by first letter means each search reads ~1–2 MB at most — fast enough to feel instant.
+
+---
+
+## Dictionary File Format
+
+dict.cc exports are tab-separated values:
+
+```
+# dict.cc :: English - German dictionary
+# Lines starting with # are ignored
+source_word[TAB]translation[TAB]optional_notes
+```
+
+Example:
+```
+dog	Hund [m]	[animal]
+cat	Katze [f]
+run	laufen; rennen
+```
+
+---
+
+## Controls
+
+### Main Menu
+| Button | Action |
+|--------|--------|
+| Up/Down | Navigate rows |
+| Left/Right on Search row | Cycle active dictionary |
+| OK | Open selected view |
+| Long-OK | Open Settings |
+| Back | Exit app |
+
+### Search (Keyboard)
+| Button | Action |
+|--------|--------|
+| D-Pad | Navigate keyboard |
+| OK | Type character / activate button |
+| Long-OK (on letter) | Type opposite case |
+| Long-Up | Fill suggestion + space |
+| Long-L/R | Cycle suggestions |
+| Long-Down | Insert space |
+| GO! | Search dictionary |
+| Back | Backspace |
+| Long-Back | Exit to menu |
+
+### Search Results
+| Button | Action |
+|--------|--------|
+| Up/Down | Navigate results |
+| OK | Open entry |
+| Back | Return to keyboard |
+
+### Entry View
+| Button | Action |
+|--------|--------|
+| Up/Down | Scroll translation text |
+| Left | Previous search result |
+| Right | Next search result |
+| OK | Scroll down one page |
+| Long-OK | Toggle favorite (star shown in header) |
+| Back | Return to results or previous view |
+
+### Favorites
+| Button | Action |
+|--------|--------|
+| Up/Down | Navigate list |
+| OK | Open entry |
+| Long-OK | Remove from favorites |
+| Back | Return to menu |
+
+### Settings
+| Button | Action |
+|--------|--------|
+| Up/Down | Navigate rows |
+| Left/Right | Toggle / cycle value |
+| Long-OK | Open expanded list picker |
+| OK | Save and close |
+| Back | Close without saving |
+
+---
+
+## Building
+
+Place this directory alongside your Flipper Zero firmware and build with:
+
+```bash
+./fbt fap_fz_dict_app
+```
+
+Or use the GitHub Actions workflow (see `.github/workflows/build.yml` from FZ Bible for reference).
+
+---
+
+## Acknowledgements
+
+Built on the architecture of the [FZ Bible App](https://github.com/H4W9/FZ_Bible_App), preserving the same UI patterns, keyboard, font system, and code style.
+
+Dictionary data from [dict.cc](https://www.dict.cc/) — please respect their terms of service when downloading and using their data.
