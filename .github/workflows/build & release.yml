@@ -63,7 +63,7 @@ jobs:
           VERSION=$(python3 -c "
           import re, sys
           content = open('application.fam').read()
-          match = re.search(r'fap_version\s*=\s*[\"\']([\d.]+)[\"\']]', content) or \
+          match = re.search(r'fap_version\s*=\s*[\"\']([\d.]+)[\"\']', content) or \
                   re.search(r'fap_version\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)', content)
           if not match:
               print('Could not find fap_version', file=sys.stderr)
