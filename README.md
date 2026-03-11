@@ -1,6 +1,6 @@
 # FZ Dictionary
 
-A dict.cc dictionary viewer for Flipper Zero — built in the same style as the FZ Bible App.
+A dict.cc dictionary for Flipper Zero — built in the same style as the FZ Bible App.
 
 ---
 
