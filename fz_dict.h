@@ -17,9 +17,12 @@
 #define SETTINGS_PATH   DATA_DIR "/settings.txt"
 #define FAVORITES_PATH  DATA_DIR "/favorites.txt"
 #define KEYWORDS_PATH   DATA_DIR "/keywords.txt"
+#define HISTORY_PATH    DATA_DIR "/history.txt"
 
 #define MAX_DICTS           8
 #define DICT_NAME_LEN       48
+#define MAX_HISTORY         50
+#define HISTORY_TERM_LEN    65   // MAX_SEARCH_LEN + 1
 #define MAX_FAVORITES       50
 #define FAV_WORD_LEN        48
 #define WORD_DISPLAY_LEN    64   // source word display buffer
@@ -30,7 +33,7 @@
 
 #define HDR_H            12
 #define MENU_ROW_H       10
-#define MENU_ROWS         4
+#define MENU_ROWS         5
 #define MENU_VIS          5
 #define MENU_BODY_Y      (HDR_H + 1)
 #define READ_BODY_Y      (HDR_H + 2)
@@ -66,6 +69,7 @@ typedef enum {
     ViewSettings,
     ViewFavorites,
     ViewAbout,
+    ViewHistory,
     ViewLoading,
     ViewError,
 } AppView;
@@ -73,8 +77,9 @@ typedef enum {
 typedef enum {
     RowSearch    = 0,
     RowFavorites = 1,
-    RowSettings  = 2,
-    RowAbout     = 3,
+    RowHistory   = 2,
+    RowSettings  = 3,
+    RowAbout     = 4,
 } MenuRow;
 
 typedef enum {
@@ -180,6 +185,14 @@ typedef struct App {
     uint8_t fav_sel;
     uint8_t fav_scroll;
 
+    // Search history
+    char    history[MAX_HISTORY][HISTORY_TERM_LEN];
+    uint8_t hist_count;
+    uint8_t hist_sel;
+    uint8_t hist_scroll;
+    bool    hist_confirm_clear;   // true while waiting for confirm on clear-all
+    bool    hist_long_consumed;
+
     // Settings view state
     SettingsRow settings_sel;
     uint8_t     settings_font_sel;
@@ -200,6 +213,8 @@ void draw_scrollbar(Canvas* canvas, App* app, uint16_t pos, uint16_t total, uint
 void set_fg(Canvas* canvas, App* app);
 void set_ui_font(Canvas* canvas, const char* str);
 void do_search(App* app);
+void history_add(App* app);
+void history_load(App* app);
 void open_entry(App* app);
 void keywords_load(App* app);
 void suggestions_update(App* app);

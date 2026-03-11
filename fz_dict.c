@@ -258,6 +258,91 @@ static void dicts_scan(App* app) {
     storage_file_free(dir);
 }
 
+
+// ============================================================
+// Search history (persisted to HISTORY_PATH, most-recent first)
+// ============================================================
+
+static void history_save(App* app) {
+    File* f = storage_file_alloc(app->storage);
+    if(!storage_file_open(f, HISTORY_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        storage_file_free(f);
+        return;
+    }
+    for(uint8_t i = 0; i < app->hist_count; i++) {
+        storage_file_write(f, app->history[i], strlen(app->history[i]));
+        storage_file_write(f, "\n", 1);
+    }
+    storage_file_close(f);
+    storage_file_free(f);
+}
+
+void history_load(App* app) {
+    app->hist_count  = 0;
+    app->hist_sel    = 0;
+    app->hist_scroll = 0;
+
+    File* f = storage_file_alloc(app->storage);
+    if(!storage_file_open(f, HISTORY_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        storage_file_free(f);
+        return;
+    }
+
+    char line[HISTORY_TERM_LEN + 2];
+    uint8_t lpos = 0;
+    char ch = 0;
+    while(app->hist_count < MAX_HISTORY) {
+        uint16_t rd = storage_file_read(f, &ch, 1);
+        if(rd == 0) {
+            if(lpos > 0) {
+                line[lpos] = '\0';
+                strncpy(app->history[app->hist_count++], line, HISTORY_TERM_LEN - 1);
+                app->history[app->hist_count - 1][HISTORY_TERM_LEN - 1] = '\0';
+            }
+            break;
+        }
+        if(ch == '\n' || ch == '\r') {
+            if(lpos > 0) {
+                line[lpos] = '\0';
+                strncpy(app->history[app->hist_count++], line, HISTORY_TERM_LEN - 1);
+                app->history[app->hist_count - 1][HISTORY_TERM_LEN - 1] = '\0';
+                lpos = 0;
+            }
+        } else {
+            if(lpos < HISTORY_TERM_LEN - 1) line[lpos++] = ch;
+        }
+    }
+
+    storage_file_close(f);
+    storage_file_free(f);
+}
+
+// Add current search_buf to history (most recent first, no duplicates).
+void history_add(App* app) {
+    if(app->search_len == 0) return;
+
+    // Remove existing duplicate (case-sensitive)
+    for(uint8_t i = 0; i < app->hist_count; i++) {
+        if(strcmp(app->history[i], app->search_buf) == 0) {
+            for(uint8_t j = i; j + 1 < app->hist_count; j++)
+                memcpy(app->history[j], app->history[j + 1], HISTORY_TERM_LEN);
+            app->hist_count--;
+            break;
+        }
+    }
+
+    // Shift everything down to make room at index 0
+    uint8_t cap = (app->hist_count < MAX_HISTORY) ? app->hist_count : (MAX_HISTORY - 1);
+    for(uint8_t i = cap; i > 0; i--)
+        memcpy(app->history[i], app->history[i - 1], HISTORY_TERM_LEN);
+
+    strncpy(app->history[0], app->search_buf, HISTORY_TERM_LEN - 1);
+    app->history[0][HISTORY_TERM_LEN - 1] = '\0';
+    if(app->hist_count < MAX_HISTORY) app->hist_count++;
+
+    history_save(app);
+}
+
 // ============================================================
 // Keywords / suggestions
 // ============================================================
@@ -812,6 +897,17 @@ static void draw_menu(Canvas* canvas, App* app) {
                                     AlignRight, AlignBottom, fval);
             break;
         }
+        case RowHistory: {
+            canvas_draw_str(canvas, 2, y + 8, "History");
+            char hval[10];
+            if(app->hist_count == 0)
+                snprintf(hval, sizeof(hval), ">");
+            else
+                snprintf(hval, sizeof(hval), "%d >", (int)app->hist_count);
+            canvas_draw_str_aligned(canvas, SCREEN_W - SB_W - 3, y + 8,
+                                    AlignRight, AlignBottom, hval);
+            break;
+        }
         case RowSettings:
             canvas_draw_str(canvas, 2, y + 8, "Settings");
             canvas_draw_str_aligned(canvas, SCREEN_W - SB_W - 3, y + 8,
@@ -1098,6 +1194,164 @@ static void draw_favorites(Canvas* canvas, App* app) {
 }
 
 // ============================================================
+// Scene: History
+// ============================================================
+
+static void draw_history(Canvas* canvas, App* app) {
+    if(app->dark_mode) {
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
+    }
+
+    char hdr_buf[28];
+    if(app->hist_count == 0)
+        snprintf(hdr_buf, sizeof(hdr_buf), "History");
+    else
+        snprintf(hdr_buf, sizeof(hdr_buf), "History (%d)", (int)app->hist_count);
+    draw_hdr(canvas, hdr_buf);
+
+    set_fg(canvas, app);
+    canvas_set_font(canvas, FontSecondary);
+
+    // Confirm-clear overlay
+    if(app->hist_confirm_clear) {
+        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 28,
+                                AlignCenter, AlignCenter, "Clear all history?");
+        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 42,
+                                AlignCenter, AlignCenter, "OK=confirm  Back=cancel");
+        return;
+    }
+
+    if(app->hist_count == 0) {
+        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 34,
+                                AlignCenter, AlignCenter, "No history yet.");
+        canvas_draw_str_aligned(canvas, SCREEN_W / 2, 46,
+                                AlignCenter, AlignCenter, "Searches auto-saved.");
+        return;
+    }
+
+    const uint8_t LINE_H = 10;
+    const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+
+    if(app->hist_sel < app->hist_scroll)
+        app->hist_scroll = app->hist_sel;
+    if(app->hist_sel >= app->hist_scroll + vis)
+        app->hist_scroll = (uint8_t)(app->hist_sel - vis + 1);
+
+    for(uint8_t i = 0; i < vis && (app->hist_scroll + i) < app->hist_count; i++) {
+        uint8_t si  = app->hist_scroll + i;
+        uint8_t y   = HDR_H + 2 + i * LINE_H;
+        bool    sel = (si == app->hist_sel);
+
+        if(sel) {
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_box(canvas, 0, y - 1, SCREEN_W - SB_W - 2, LINE_H);
+            canvas_set_color(canvas, ColorWhite);
+        } else {
+            canvas_set_color(canvas, ColorBlack);
+        }
+
+        char disp[24];
+        truncate_utf8_display(app->history[si], disp, sizeof(disp), 18);
+        set_ui_font(canvas, disp);
+        canvas_draw_str(canvas, 4, y + 8, disp);
+        canvas_set_font(canvas, FontSecondary);
+        set_fg(canvas, app);
+    }
+
+    draw_scrollbar(canvas, app, app->hist_scroll, app->hist_count, vis);
+}
+
+// ============================================================
+// Input: History list
+// ============================================================
+
+static void on_history(App* app, InputEvent* ev) {
+    const uint8_t LINE_H = 10;
+    const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+
+    // ── Confirm-clear overlay active ─────────────────────────────────────
+    if(app->hist_confirm_clear) {
+        if(ev->type == InputTypeShort) {
+            if(ev->key == InputKeyOk) {
+                // Clear all
+                app->hist_count          = 0;
+                app->hist_sel            = 0;
+                app->hist_scroll         = 0;
+                app->hist_confirm_clear  = false;
+                history_save(app);
+            } else if(ev->key == InputKeyBack) {
+                app->hist_confirm_clear = false;
+            }
+        }
+        return;
+    }
+
+    // ── Long-OK: delete selected entry ───────────────────────────────────
+    if(ev->type == InputTypeLong && ev->key == InputKeyOk) {
+        if(app->hist_long_consumed) return;
+        if(app->hist_count == 0) { app->hist_long_consumed = true; return; }
+        uint8_t hi = app->hist_sel;
+        for(uint8_t i = hi; i + 1 < app->hist_count; i++)
+            memcpy(app->history[i], app->history[i + 1], HISTORY_TERM_LEN);
+        app->hist_count--;
+        if(app->hist_sel >= app->hist_count && app->hist_count > 0)
+            app->hist_sel = app->hist_count - 1;
+        history_save(app);
+        app->hist_long_consumed = true;
+        return;
+    }
+    if(ev->type == InputTypeRelease && ev->key == InputKeyOk) {
+        app->hist_long_consumed = false;
+        return;
+    }
+    if(app->hist_long_consumed) return;
+
+    // ── Long-Back: prompt to clear all ───────────────────────────────────
+    if(ev->type == InputTypeLong && ev->key == InputKeyBack) {
+        if(app->hist_count > 0)
+            app->hist_confirm_clear = true;
+        return;
+    }
+
+    if(ev->type != InputTypeShort && ev->type != InputTypeRepeat) return;
+
+    switch(ev->key) {
+    case InputKeyUp:
+        if(app->hist_count == 0) break;
+        if(app->hist_sel > 0) app->hist_sel--;
+        else app->hist_sel = app->hist_count - 1;
+        break;
+    case InputKeyDown:
+        if(app->hist_count == 0) break;
+        if(app->hist_sel < app->hist_count - 1) app->hist_sel++;
+        else app->hist_sel = 0;
+        break;
+    case InputKeyOk:
+        if(app->hist_count == 0) break;
+        // Fill the search buffer with the selected term and go to keyboard
+        strncpy(app->search_buf, app->history[app->hist_sel], MAX_SEARCH_LEN);
+        app->search_buf[MAX_SEARCH_LEN] = '\0';
+        app->search_len  = (uint8_t)strlen(app->search_buf);
+        app->cursor_pos  = app->search_len;
+        app->text_scroll = 0;
+        app->view = ViewSearch;
+        break;
+    case InputKeyBack:
+        app->view = ViewMenu;
+        break;
+    default: break;
+    }
+
+    if(app->hist_count > 0) {
+        if(app->hist_sel < app->hist_scroll)
+            app->hist_scroll = app->hist_sel;
+        if(app->hist_sel >= app->hist_scroll + vis)
+            app->hist_scroll = (uint8_t)(app->hist_sel - vis + 1);
+    }
+}
+
+// ============================================================
 // Scene: About
 // ============================================================
 
@@ -1154,6 +1408,15 @@ static const char* const ABOUT_LINES[] = {
     "  OK = open entry",
     "  Long-OK = remove",
     "  Back = close",
+    "- - - - History - - -",
+    "  Up/Down = navigate",
+    "  OK = fill+go to kbd",
+    "  Long-OK = delete 1",
+    "  Long-Back = clear*",
+    "  Back = close",
+    "---------------------",
+    " * shows confirm",
+    "   prompt first.",
     "---------------------",
     " * star shown in hdr",
     " when entry is saved.",
@@ -1328,6 +1591,13 @@ static void on_menu(App* app, InputEvent* ev) {
             app->fav_sel    = 0;
             app->fav_scroll = 0;
             app->view = ViewFavorites;
+            break;
+        case RowHistory:
+            app->hist_sel            = 0;
+            app->hist_scroll         = 0;
+            app->hist_confirm_clear  = false;
+            app->hist_long_consumed  = false;
+            app->view = ViewHistory;
             break;
         case RowSettings:
             app->settings_sel        = (app->dict_count > 1) ? SettingsRowDict : SettingsRowFont;
@@ -1646,6 +1916,9 @@ int32_t fz_dict_app(void* p) {
     // Load saved favorites
     favorites_load(app);
 
+    // Load search history
+    history_load(app);
+
     // Load keyword suggestions (from keywords.txt on SD, if present)
     keywords_load(app);
 
@@ -1664,6 +1937,7 @@ int32_t fz_dict_app(void* p) {
         case ViewEntry:         on_entry(app, &ev);          break;
         case ViewSettings:      on_settings(app, &ev);       break;
         case ViewFavorites:     on_favorites(app, &ev);      break;
+        case ViewHistory:       on_history(app, &ev);        break;
         case ViewAbout:         on_about(app, &ev);          break;
         case ViewError:
             if(ev.type == InputTypeShort && ev.key == InputKeyBack)

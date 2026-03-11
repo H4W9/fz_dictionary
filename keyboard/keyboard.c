@@ -471,6 +471,7 @@ void on_search(App* app, InputEvent* ev) {
                     app->view = ViewLoading;
                     view_port_update(app->view_port);
                     do_search(app);
+                    history_add(app);
                     app->view = ViewSearchResults;
                 }
                 break;
