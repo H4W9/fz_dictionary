@@ -1792,9 +1792,11 @@ static void on_settings(App* app, InputEvent* ev) {
     case InputKeyOk:
         // Save and close
         settings_save(app);
+        app->menu_long_consumed = false;
         app->view = ViewMenu;
         break;
     case InputKeyBack:
+        app->menu_long_consumed = false;
         app->view = ViewMenu;
         break;
     default: break;
