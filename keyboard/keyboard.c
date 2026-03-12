@@ -165,7 +165,7 @@ void draw_search_input(Canvas* canvas, App* app) {
     canvas_draw_str(canvas, FIELD_X + 1, HDR_H + 10, disp);
 
     // ── Blinking cursor ─────────────────────────────────────────────────
-    if((app->cursor_blink & 0x08) == 0) {
+    if((app->cursor_blink & 0x10) == 0) {
         uint8_t cursor_char = byte_to_char(app->search_buf, app->cursor_pos);
         uint8_t cx_chars = (cursor_char >= app->text_scroll) ?
                            (cursor_char - app->text_scroll) : 0;
@@ -254,8 +254,11 @@ void draw_search_results(Canvas* canvas, App* app) {
         return;
     }
 
-    const uint8_t LINE_H = 10;
-    const uint8_t vis    = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
+    app->list_tick++;
+
+    const uint8_t LINE_H  = 10;
+    const uint8_t MAX_VIS = 22;   // FONT_SIZE_MEDIUM 5x8 fixed: 22*5=110px < 118px available
+    const uint8_t vis     = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
     if(app->hit_sel < app->hit_scroll)
         app->hit_scroll = app->hit_sel;
@@ -263,8 +266,8 @@ void draw_search_results(Canvas* canvas, App* app) {
         app->hit_scroll = (uint8_t)(app->hit_sel - vis + 1);
 
     for(uint8_t i = 0; i < vis && (app->hit_scroll + i) < app->hit_count; i++) {
-        uint8_t si = app->hit_scroll + i;
-        uint8_t y  = HDR_H + 2 + i * LINE_H;
+        uint8_t si  = app->hit_scroll + i;
+        uint8_t y   = HDR_H + 2 + i * LINE_H;
         bool    sel = (si == app->hit_sel);
 
         if(sel) {
@@ -275,21 +278,15 @@ void draw_search_results(Canvas* canvas, App* app) {
             canvas_set_color(canvas, ColorBlack);
         }
 
-        // Truncate at draw time so every font fits within 118px of usable width.
-        // Available: 128 - 4(left) - 3(SB) - 2(gap) - 1(safety) = 118px
-        // FONT_COUNT limits: proportional≈14, 4x6=29, 5x8=23, 6x10=19, 9x15=13
-        static const uint8_t RES_CHARS[FONT_COUNT] = { 14, 29, 23, 19, 13 };
         char disp[HIT_REF_LEN];
-        if(str_has_umlaut(app->hits[si].ref)) {
-            canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM);
-            truncate_utf8_display(app->hits[si].ref, disp, sizeof(disp), 23);
+        if(sel) {
+            uint8_t cc = utf8_char_count(app->hits[si].ref);
+            str_marquee_sub(app->hits[si].ref, cc, MAX_VIS, app->list_tick, app->scroll_speed, disp, sizeof(disp));
         } else {
-            apply_font(canvas, app->font_choice);
-            truncate_utf8_display(app->hits[si].ref, disp, sizeof(disp),
-                                  RES_CHARS[app->font_choice]);
+            truncate_utf8_display(app->hits[si].ref, disp, sizeof(disp), MAX_VIS);
         }
+        canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM);
         canvas_draw_str(canvas, 4, y + 8, disp);
-        canvas_set_font(canvas, FontSecondary);
         canvas_set_color(canvas, ColorBlack);
     }
 

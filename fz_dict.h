@@ -94,7 +94,8 @@ typedef enum {
     SettingsRowDict  = 0,
     SettingsRowFont  = 1,
     SettingsRowDark  = 2,
-    SettingsRowCount = 3,
+    SettingsRowScroll = 3,
+    SettingsRowCount = 4,
 } SettingsRow;
 
 // ============================================================
@@ -204,6 +205,7 @@ typedef struct App {
     uint8_t     settings_dict_sel;
     bool        settings_dict_open;
     bool        settings_long_consumed;
+    uint8_t     scroll_speed;   // marquee step_frames: 3=Fast, 6=Normal, 10=Slow
 
 } App;
 
@@ -223,5 +225,9 @@ void open_entry(App* app);
 void keywords_load(App* app);
 void apply_font(Canvas* canvas, FontChoice f);
 void truncate_utf8_display(const char* src, char* dst, size_t dst_size, uint8_t max_chars);
+uint8_t utf8_char_count(const char* s);
+bool str_marquee_sub(const char* src, uint8_t char_count,
+                     uint8_t max_vis, uint8_t tick, uint8_t step_frames,
+                     char* out, uint8_t out_size);
 void suggestions_update(App* app);
 void suggestion_fill(App* app);

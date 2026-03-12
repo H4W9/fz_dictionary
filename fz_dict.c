@@ -88,21 +88,23 @@ static void settings_save(App* app) {
         storage_file_free(f);
         return;
     }
-    char buf[96];
+    char buf[128];
     int len = snprintf(buf, sizeof(buf),
-        "font=%d\ndark=%d\ndict=%d\n",
+        "font=%d\ndark=%d\ndict=%d\nspeed=%d\n",
         (int)app->font_choice,
         (int)app->dark_mode,
-        (int)app->dict_idx);
+        (int)app->dict_idx,
+        (int)app->scroll_speed);
     if(len > 0) storage_file_write(f, buf, (uint16_t)len);
     storage_file_close(f);
     storage_file_free(f);
 }
 
 static void settings_load(App* app) {
-    app->font_choice = FontSecondaryBuiltin;
-    app->dark_mode   = false;
-    app->dict_idx    = 0;
+    app->font_choice  = FontSecondaryBuiltin;
+    app->dark_mode    = false;
+    app->dict_idx     = 0;
+    app->scroll_speed = 6;
 
     File* f = storage_file_alloc(app->storage);
     if(!storage_file_open(f, SETTINGS_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
@@ -116,9 +118,10 @@ static void settings_load(App* app) {
     storage_file_free(f);
 
     char* p;
-    if((p = strstr(buf, "font=")) != NULL) { int v = atoi(p+5); if(v>=0&&v<FONT_COUNT) app->font_choice=(FontChoice)v; }
-    if((p = strstr(buf, "dark=")) != NULL) { app->dark_mode = (atoi(p+5) != 0); }
-    if((p = strstr(buf, "dict=")) != NULL) { int v = atoi(p+5); if(v>=0&&v<MAX_DICTS) app->dict_idx=(uint8_t)v; }
+    if((p = strstr(buf, "font="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<FONT_COUNT) app->font_choice=(FontChoice)v; }
+    if((p = strstr(buf, "dark="))  != NULL) { app->dark_mode = (atoi(p+5) != 0); }
+    if((p = strstr(buf, "dict="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<MAX_DICTS) app->dict_idx=(uint8_t)v; }
+    if((p = strstr(buf, "speed=")) != NULL) { int v = atoi(p+6); if(v>0&&v<=20) app->scroll_speed=(uint8_t)v; }
 }
 
 // ============================================================
@@ -527,6 +530,7 @@ void do_search(App* app) {
     app->hit_count  = 0;
     app->hit_sel    = 0;
     app->hit_scroll = 0;
+    app->list_tick  = 0;
 
     if(!app->search_len || app->dict_count == 0) return;
 
@@ -936,10 +940,19 @@ static void draw_entry(Canvas* canvas, App* app) {
         canvas_draw_box(canvas, 0, 0, SCREEN_W, SCREEN_H);
     }
 
-    // Header: source word (truncated if needed)
-    char hdr[40];
-    truncate_utf8_display(app->entry_word, hdr, sizeof(hdr), 18);
-    draw_hdr(canvas, hdr);
+    app->list_tick++;
+
+    // Header: source word with marquee scrolling
+    // FontPrimary is bold proportional ~7px/char avg. Max visible chars ~16 at 112px.
+    // We use list_tick so scrolling is frame-driven like the list views.
+    {
+        const uint8_t HDR_MAX = 16;
+        uint8_t cc = utf8_char_count(app->entry_word);
+        char hdr[ENTRY_WORD_LEN];
+        str_marquee_sub(app->entry_word, cc, HDR_MAX, app->list_tick,
+                        app->scroll_speed, hdr, sizeof(hdr));
+        draw_hdr(canvas, hdr);
+    }
 
     // Favorite star indicator in header
     if(app->entry_is_fav) {
@@ -1125,6 +1138,26 @@ static void draw_settings(Canvas* canvas, App* app) {
         set_fg(canvas, app);
     }
 
+    // Row: Scroll speed
+    {
+        uint8_t row_offset = (app->dict_count > 1) ? 3 : 2;
+        uint8_t y   = BODY_Y + ITEM_H * row_offset;
+        bool    sel = (app->settings_sel == SettingsRowScroll);
+        if(sel) {
+            set_fg(canvas, app);
+            canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
+            set_bg(canvas, app);
+        } else {
+            set_fg(canvas, app);
+        }
+        canvas_draw_str(canvas, 3, y + 8, "Scroll Speed");
+        const char* slabel = (app->scroll_speed <= 3) ? "[Fast]" :
+                             (app->scroll_speed >= 10) ? "[Slow]" : "[Normal]";
+        canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+                                AlignRight, AlignBottom, slabel);
+        set_fg(canvas, app);
+    }
+
     set_fg(canvas, app);
     canvas_set_font(canvas, FontSecondary);
     canvas_draw_str_aligned(canvas, SCREEN_W / 2, SCREEN_H - 2,
@@ -1136,7 +1169,7 @@ static void draw_settings(Canvas* canvas, App* app) {
 // List-row marquee scrolling (ported from luther1912)
 // ============================================================
 
-static uint8_t utf8_char_count(const char* s) {
+uint8_t utf8_char_count(const char* s) {
     uint8_t n = 0;
     while(*s) {
         if(((uint8_t)*s & 0xC0) != 0x80) n++;
@@ -1148,9 +1181,9 @@ static uint8_t utf8_char_count(const char* s) {
 // Fills out[] with a max_vis-character window into src, driven by tick.
 // Pauses at start/end, then steps one glyph per STEP_FRAMES.
 // Returns true when the string is wider than the window (i.e. scrolling active).
-static bool str_marquee_sub(const char* src, uint8_t char_count,
-                             uint8_t max_vis, uint8_t tick,
-                             char* out, uint8_t out_size) {
+bool str_marquee_sub(const char* src, uint8_t char_count,
+                     uint8_t max_vis, uint8_t tick, uint8_t step_frames,
+                     char* out, uint8_t out_size) {
     if(char_count <= max_vis || max_vis == 0) {
         uint8_t i = 0;
         while(src[i] && i < out_size - 1) { out[i] = src[i]; i++; }
@@ -1160,7 +1193,7 @@ static bool str_marquee_sub(const char* src, uint8_t char_count,
 
     const uint8_t  scroll_range = (uint8_t)(char_count - max_vis);
     const uint8_t  PAUSE_FRAMES = 20;
-    const uint8_t  STEP_FRAMES  = 6;
+    const uint8_t  STEP_FRAMES  = step_frames ? step_frames : 6;
     const uint16_t cycle_len    = (uint16_t)(PAUSE_FRAMES +
                                    (uint16_t)scroll_range * STEP_FRAMES +
                                    PAUSE_FRAMES);
@@ -1206,7 +1239,7 @@ static void draw_confirm_popup(Canvas* canvas, const char* title,
     const uint8_t BOX_X  = 2;
     const uint8_t BOX_W  = SCREEN_W - 4;   // 124 px
     const uint8_t BOX_H  = 38;
-    const uint8_t BOX_Y  = (SCREEN_H - BOX_H) / 2 - 1;
+    const uint8_t BOX_Y  = (SCREEN_H - BOX_H) / 2;
     const uint8_t HDR_HT = 11;
 
     // Shadow
@@ -1247,7 +1280,6 @@ static void draw_favorites(Canvas* canvas, App* app) {
     // Popup path: clean white canvas, header, popup — mirrors luther1912 separate-view pattern
     if(app->fav_confirm_delete) {
         canvas_clear(canvas);
-        draw_hdr(canvas, hdr_buf);
         draw_confirm_popup(canvas, "Remove Favorite", "Remove this entry?", "OK=yes  Back=cancel");
         return;
     }
@@ -1272,7 +1304,7 @@ static void draw_favorites(Canvas* canvas, App* app) {
     app->list_tick++;
 
     const uint8_t LINE_H  = 10;
-    const uint8_t MAX_VIS = 19;   // FontSecondary ~6px/char, 118px body → 19 chars
+    const uint8_t MAX_VIS = 22;   // FONT_SIZE_MEDIUM 5x8 fixed: 22*5=110px < 118px available
     const uint8_t vis     = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
     if(app->fav_sel < app->fav_scroll)
@@ -1297,13 +1329,12 @@ static void draw_favorites(Canvas* canvas, App* app) {
         char disp[FAV_WORD_LEN + 1];
         if(sel) {
             uint8_t cc = utf8_char_count(word);
-            str_marquee_sub(word, cc, MAX_VIS, app->list_tick, disp, sizeof(disp));
+            str_marquee_sub(word, cc, MAX_VIS, app->list_tick, app->scroll_speed, disp, sizeof(disp));
         } else {
             truncate_utf8_display(word, disp, sizeof(disp), MAX_VIS);
         }
-        set_ui_font(canvas, disp);
+        canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM);
         canvas_draw_str(canvas, 4, y + 8, disp);
-        canvas_set_font(canvas, FontSecondary);
         canvas_set_color(canvas, ColorBlack);
     }
 
@@ -1324,13 +1355,11 @@ static void draw_history(Canvas* canvas, App* app) {
     // Popup path: clean white canvas, header, popup — mirrors luther1912 separate-view pattern
     if(app->hist_confirm_delete) {
         canvas_clear(canvas);
-        draw_hdr(canvas, hdr_buf);
         draw_confirm_popup(canvas, "Delete Entry", "Delete this entry?", "OK=yes  Back=cancel");
         return;
     }
     if(app->hist_confirm_clear) {
         canvas_clear(canvas);
-        draw_hdr(canvas, hdr_buf);
         draw_confirm_popup(canvas, "Clear History", "Clear all history?", "OK=yes  Back=cancel");
         return;
     }
@@ -1355,7 +1384,7 @@ static void draw_history(Canvas* canvas, App* app) {
     app->list_tick++;
 
     const uint8_t LINE_H  = 10;
-    const uint8_t MAX_VIS = 19;   // FontSecondary ~6px/char, 118px body → 19 chars
+    const uint8_t MAX_VIS = 22;   // FONT_SIZE_MEDIUM 5x8 fixed: 22*5=110px < 118px available
     const uint8_t vis     = (uint8_t)((SCREEN_H - HDR_H - 2) / LINE_H);
 
     if(app->hist_sel < app->hist_scroll)
@@ -1380,13 +1409,12 @@ static void draw_history(Canvas* canvas, App* app) {
         char disp[HISTORY_TERM_LEN + 1];
         if(sel) {
             uint8_t cc = utf8_char_count(term);
-            str_marquee_sub(term, cc, MAX_VIS, app->list_tick, disp, sizeof(disp));
+            str_marquee_sub(term, cc, MAX_VIS, app->list_tick, app->scroll_speed, disp, sizeof(disp));
         } else {
             truncate_utf8_display(term, disp, sizeof(disp), MAX_VIS);
         }
-        set_ui_font(canvas, disp);
+        canvas_set_font_custom(canvas, FONT_SIZE_MEDIUM);
         canvas_draw_str(canvas, 4, y + 8, disp);
-        canvas_set_font(canvas, FontSecondary);
         set_fg(canvas, app);
     }
 
@@ -1900,7 +1928,7 @@ static void on_settings(App* app, InputEvent* ev) {
     // When dict_count <= 1 the Dictionary row is hidden; valid rows are Font and Dark only.
     const uint8_t first_row = (app->dict_count > 1) ?
                               (uint8_t)SettingsRowDict : (uint8_t)SettingsRowFont;
-    const uint8_t last_row  = (uint8_t)SettingsRowDark;
+    const uint8_t last_row  = (uint8_t)SettingsRowScroll;
 
     switch(ev->key) {
     case InputKeyUp:
@@ -1920,6 +1948,16 @@ static void on_settings(App* app, InputEvent* ev) {
         switch(app->settings_sel) {
         case SettingsRowDark:
             app->dark_mode = !app->dark_mode;
+            break;
+        case SettingsRowScroll:
+            // Cycle: Slow(10) → Normal(6) → Fast(3)
+            if(ev->key == InputKeyRight) {
+                app->scroll_speed = (app->scroll_speed >= 10) ? 6 :
+                                    (app->scroll_speed >= 6)  ? 3 : 10;
+            } else {
+                app->scroll_speed = (app->scroll_speed <= 3) ? 6 :
+                                    (app->scroll_speed <= 6) ? 10 : 3;
+            }
             break;
         case SettingsRowFont:
             if(ev->key == InputKeyRight)
@@ -2100,23 +2138,27 @@ int32_t fz_dict_app(void* p) {
 
     InputEvent ev;
     while(app->running) {
-        if(furi_message_queue_get(app->queue, &ev, 100) != FuriStatusOk)
-            continue;
+        // 33ms timeout → ~30fps draw rate regardless of input.
+        // This keeps the marquee scrolling and popup rendering continuously
+        // rather than only on button presses.
+        bool got_event = (furi_message_queue_get(app->queue, &ev, 33) == FuriStatusOk);
 
-        switch(app->view) {
-        case ViewMenu:          on_menu(app, &ev);           break;
-        case ViewSearch:        on_search(app, &ev);         break;
-        case ViewSearchResults: on_search_results(app, &ev); break;
-        case ViewEntry:         on_entry(app, &ev);          break;
-        case ViewSettings:      on_settings(app, &ev);       break;
-        case ViewFavorites:     on_favorites(app, &ev);      break;
-        case ViewHistory:       on_history(app, &ev);        break;
-        case ViewAbout:         on_about(app, &ev);          break;
-        case ViewError:
-            if(ev.type == InputTypeShort && ev.key == InputKeyBack)
-                app->view = ViewMenu;
-            break;
-        case ViewLoading: break;
+        if(got_event) {
+            switch(app->view) {
+            case ViewMenu:          on_menu(app, &ev);           break;
+            case ViewSearch:        on_search(app, &ev);         break;
+            case ViewSearchResults: on_search_results(app, &ev); break;
+            case ViewEntry:         on_entry(app, &ev);          break;
+            case ViewSettings:      on_settings(app, &ev);       break;
+            case ViewFavorites:     on_favorites(app, &ev);      break;
+            case ViewHistory:       on_history(app, &ev);        break;
+            case ViewAbout:         on_about(app, &ev);          break;
+            case ViewError:
+                if(ev.type == InputTypeShort && ev.key == InputKeyBack)
+                    app->view = ViewMenu;
+                break;
+            case ViewLoading: break;
+            }
         }
 
         view_port_update(app->view_port);
