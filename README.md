@@ -1,6 +1,6 @@
 # FZ Dictionary
 
-A dict.cc dictionary for Flipper Zero — built in the same style as the FZ Bible App.
+A dict.cc and wiktionary dictionary for Flipper Zero — built in the same style as the FZ Bible App.
 
 ---
 
@@ -14,9 +14,7 @@ A dict.cc dictionary for Flipper Zero — built in the same style as the FZ Bibl
 
 <img width=19% height=19% alt="word_view" src="https://github.com/user-attachments/assets/69c1b767-8ff5-4953-896f-dad6a29d3bc9" />
 
-
 ---
-
 
 ## Features
 
@@ -53,17 +51,22 @@ The app expects dictionaries as **folders of letter-bucket files**, not a single
 ### Step 1 — Convert the dict.cc file
 
 ```bash
-# In the sd_prep/ directory:
+# Split into both EN->DE and DE->EN from a single download (recommended):
+python3 prepare_dict.py split EN-DE.txt --bidirectional
+
+# Or just one direction:
 python3 prepare_dict.py split EN-DE.txt
 
-# Or give the output folder a custom name:
-python3 prepare_dict.py split EN-DE.txt --name EN-DE
+# Custom folder names for both directions:
+python3 prepare_dict.py split EN-DE.txt --bidirectional --name EN-DE --reverse-name DE-EN
 
 # Preview stats without writing anything:
 python3 prepare_dict.py stats EN-DE.txt
 ```
 
-This creates a folder like:
+The `--bidirectional` flag reads the file once and writes two folders — the forward direction and a reversed copy with columns swapped. Both appear in the app and you can switch between them with Left/Right on the Search row.
+
+Each folder looks like:
 
 ```
 EN-DE/
@@ -73,6 +76,10 @@ EN-DE/
   z.txt
   0.txt   <- entries starting with a digit (0-9)
   _.txt   <- entries starting with any other character
+
+DE-EN/    <- created automatically by --bidirectional
+  a.txt
+  ...
 ```
 
 ### Step 2 — Copy to Flipper Zero SD card
@@ -94,6 +101,69 @@ You can have up to 8 dictionary folders. Switch between them using Left/Right on
 ### Why letter buckets?
 
 A full dict.cc export is typically 20–40 MB. Searching linearly through that on Flipper Zero hardware would take 15–30 seconds per query. Splitting by first letter means each search reads ~1–2 MB at most — fast enough to feel instant.
+
+---
+
+## Wiktionary Monolingual Dictionaries
+
+You can also build monolingual German or English dictionaries from Wiktionary
+using the included `prepare_wiktionary.py` script.
+
+### Step 1 — Download the Kaikki JSONL dump
+
+Go to **https://kaikki.org/dictionary/** and download the file for your language:
+
+- German: `kaikki.org-dictionary-German.jsonl` (~400 MB)
+- English: `kaikki.org-dictionary-English.jsonl` (~800 MB)
+
+These are free, openly licensed (CC BY-SA) exports of Wiktionary.
+
+### Step 2 — Convert and split
+
+```bash
+# German monolingual dictionary (outputs to DE/ folder)
+python3 prepare_wiktionary.py split kaikki.org-dictionary-German.jsonl --lang de
+
+# English monolingual dictionary (outputs to EN/ folder)
+python3 prepare_wiktionary.py split kaikki.org-dictionary-English.jsonl --lang en
+
+# Custom folder name
+python3 prepare_wiktionary.py split kaikki.org-dictionary-German.jsonl --lang de --name WIKT-DE
+
+# Only nouns, verbs, and adjectives (smaller output, faster to build)
+python3 prepare_wiktionary.py split kaikki.org-dictionary-German.jsonl --lang de --pos noun verb adj
+
+# Check stats without writing anything
+python3 prepare_wiktionary.py stats kaikki.org-dictionary-German.jsonl --lang de
+```
+
+### Output format
+
+Each entry is stored as:
+
+```
+word TAB [pos] (gender) sense1  sense2  sense3
+```
+
+Example:
+```
+Hund    [Subst.] (mask.) 1. ein Haustier der Familie Canidae  2. (umgangssprachlich) ein unangenehmer Mensch
+```
+
+The app word-wraps the definition in the entry view, so longer definitions display fine.
+
+### Example SD card layout with all dictionaries
+
+```
+/ext/apps_data/fz_dict_app/
+  EN-DE/      <- dict.cc bilingual (prepare_dict.py --bidirectional)
+  DE-EN/      <- dict.cc bilingual reverse
+  DE/         <- German Wiktionary monolingual (prepare_wiktionary.py)
+  EN/         <- English Wiktionary monolingual (prepare_wiktionary.py)
+  keywords.txt
+```
+
+Switch between all four with Left/Right on the Search row.
 
 ---
 
@@ -163,6 +233,15 @@ run	laufen; rennen
 | Up/Down | Navigate list |
 | OK | Open entry |
 | Long-OK | Remove from favorites |
+| Back | Return to menu |
+
+### History
+| Button | Action |
+|--------|--------|
+| Up/Down | Navigate list |
+| OK | Fill search bar with term and go to keyboard |
+| Long-OK | Delete selected entry |
+| Long-Back | Clear all history (shows confirmation prompt) |
 | Back | Return to menu |
 
 ### Settings
