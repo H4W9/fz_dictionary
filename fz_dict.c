@@ -8,7 +8,7 @@
 // Multiple .txt files in the data directory are detected as separate
 // dictionaries, selectable in Settings (same pattern as FZ Bible translations).
 
-#define APP_VERSION "1.0"
+#define APP_VERSION "1.1"
 #define APP_NAME    "FZ Dictionary"
 
 #include "font/font.h"
