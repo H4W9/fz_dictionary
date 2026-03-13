@@ -121,7 +121,7 @@ static void settings_load(App* app) {
     if((p = strstr(buf, "font="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<FONT_COUNT) app->font_choice=(FontChoice)v; }
     if((p = strstr(buf, "dark="))  != NULL) { app->dark_mode = (atoi(p+5) != 0); }
     if((p = strstr(buf, "dict="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<MAX_DICTS) app->dict_idx=(uint8_t)v; }
-    if((p = strstr(buf, "speed=")) != NULL) { int v = atoi(p+6); if(v>0&&v<=20) app->scroll_speed=(uint8_t)v; }
+    if((p = strstr(buf, "speed=")) != NULL) { int v = atoi(p+6); if(v>0&&v<=30) app->scroll_speed=(uint8_t)v; }
 }
 
 // ============================================================
@@ -273,8 +273,12 @@ static void history_save(App* app) {
         return;
     }
     for(uint8_t i = 0; i < app->hist_count; i++) {
-        storage_file_write(f, app->history[i], strlen(app->history[i]));
-        storage_file_write(f, "\n", 1);
+        // Format: "<dict_idx>\t<term>\n"
+        // The tab separator distinguishes new-format lines from old bare-term lines.
+        char line[HISTORY_TERM_LEN + 4];
+        int len = snprintf(line, sizeof(line), "%u\t%s\n",
+            (unsigned)app->hist_dict[i], app->history[i]);
+        if(len > 0) storage_file_write(f, line, (uint16_t)len);
     }
     storage_file_close(f);
     storage_file_free(f);
@@ -291,29 +295,47 @@ void history_load(App* app) {
         return;
     }
 
-    char line[HISTORY_TERM_LEN + 2];
+    // Line buffer: enough for "<digit>\t" prefix plus the full term
+    char line[HISTORY_TERM_LEN + 4];
     uint8_t lpos = 0;
     char ch = 0;
+
     while(app->hist_count < MAX_HISTORY) {
         uint16_t rd = storage_file_read(f, &ch, 1);
+        bool flush = false;
         if(rd == 0) {
-            if(lpos > 0) {
-                line[lpos] = '\0';
-                strncpy(app->history[app->hist_count++], line, HISTORY_TERM_LEN - 1);
-                app->history[app->hist_count - 1][HISTORY_TERM_LEN - 1] = '\0';
-            }
-            break;
-        }
-        if(ch == '\n' || ch == '\r') {
-            if(lpos > 0) {
-                line[lpos] = '\0';
-                strncpy(app->history[app->hist_count++], line, HISTORY_TERM_LEN - 1);
-                app->history[app->hist_count - 1][HISTORY_TERM_LEN - 1] = '\0';
-                lpos = 0;
-            }
+            if(lpos > 0) flush = true;
+            else break;
+        } else if(ch == '\n' || ch == '\r') {
+            if(lpos > 0) flush = true;
         } else {
-            if(lpos < HISTORY_TERM_LEN - 1) line[lpos++] = ch;
+            if(lpos < sizeof(line) - 1) line[lpos++] = ch;
         }
+
+        if(flush) {
+            line[lpos] = '\0';
+            // New format: "<dict_idx>\t<term>" — tab separates index from term.
+            // Old format: bare term with no tab — fall back to dict 0.
+            char* tab = strchr(line, '\t');
+            uint8_t didx = 0;
+            const char* term;
+            if(tab) {
+                didx = (uint8_t)atoi(line);
+                if(didx >= MAX_DICTS) didx = 0;
+                term = tab + 1;
+            } else {
+                term = line;
+            }
+            if(term[0]) {
+                strncpy(app->history[app->hist_count], term, HISTORY_TERM_LEN - 1);
+                app->history[app->hist_count][HISTORY_TERM_LEN - 1] = '\0';
+                app->hist_dict[app->hist_count] = didx;
+                app->hist_count++;
+            }
+            lpos = 0;
+        }
+
+        if(rd == 0) break;
     }
 
     storage_file_close(f);
@@ -324,11 +346,13 @@ void history_load(App* app) {
 void history_add(App* app) {
     if(app->search_len == 0) return;
 
-    // Remove existing duplicate (case-sensitive)
+    // Remove existing duplicate (case-sensitive), shifting hist_dict in step
     for(uint8_t i = 0; i < app->hist_count; i++) {
         if(strcmp(app->history[i], app->search_buf) == 0) {
-            for(uint8_t j = i; j + 1 < app->hist_count; j++)
+            for(uint8_t j = i; j + 1 < app->hist_count; j++) {
                 memcpy(app->history[j], app->history[j + 1], HISTORY_TERM_LEN);
+                app->hist_dict[j] = app->hist_dict[j + 1];
+            }
             app->hist_count--;
             break;
         }
@@ -336,11 +360,14 @@ void history_add(App* app) {
 
     // Shift everything down to make room at index 0
     uint8_t cap = (app->hist_count < MAX_HISTORY) ? app->hist_count : (MAX_HISTORY - 1);
-    for(uint8_t i = cap; i > 0; i--)
+    for(uint8_t i = cap; i > 0; i--) {
         memcpy(app->history[i], app->history[i - 1], HISTORY_TERM_LEN);
+        app->hist_dict[i] = app->hist_dict[i - 1];
+    }
 
     strncpy(app->history[0], app->search_buf, HISTORY_TERM_LEN - 1);
     app->history[0][HISTORY_TERM_LEN - 1] = '\0';
+    app->hist_dict[0] = app->dict_idx;
     if(app->hist_count < MAX_HISTORY) app->hist_count++;
 
     history_save(app);
@@ -1079,11 +1106,19 @@ static void draw_settings(Canvas* canvas, App* app) {
     }
 
     // -- Collapsed view --
+    // Build ordered list of visible rows (Dict only shown with multiple dicts).
+    SettingsRow rows[4];
+    uint8_t total = 0;
+    if(app->dict_count > 1)    rows[total++] = SettingsRowDict;
+    rows[total++] = SettingsRowFont;
+    rows[total++] = SettingsRowScroll;
+    rows[total++] = SettingsRowDark;
 
-    // Row 0: Dictionary (shown when multiple dicts available)
-    if(app->dict_count > 1) {
-        uint8_t y   = BODY_Y;
-        bool    sel = (app->settings_sel == SettingsRowDict);
+    for(uint8_t i = 0; i < total; i++) {
+        SettingsRow row = rows[i];
+        uint8_t y   = BODY_Y + ITEM_H * i;
+        bool    sel = (row == app->settings_sel);
+
         if(sel) {
             set_fg(canvas, app);
             canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
@@ -1091,78 +1126,43 @@ static void draw_settings(Canvas* canvas, App* app) {
         } else {
             set_fg(canvas, app);
         }
-        canvas_draw_str(canvas, 3, y + 8, "Dictionary");
-        char tval[20];
-        snprintf(tval, sizeof(tval), "[%.14s]", app->dicts[app->dict_idx]);
-        canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
-                                AlignRight, AlignBottom, tval);
-        set_fg(canvas, app);
-    }
 
-    // Row: Font
-    {
-        uint8_t row_offset = (app->dict_count > 1) ? 1 : 0;
-        uint8_t y   = BODY_Y + ITEM_H * row_offset;
-        bool    sel = (app->settings_sel == SettingsRowFont);
-        if(sel) {
-            set_fg(canvas, app);
-            canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
-            set_bg(canvas, app);
-        } else {
-            set_fg(canvas, app);
+        switch(row) {
+        case SettingsRowDict: {
+            canvas_draw_str(canvas, 3, y + 8, "Dictionary");
+            char tval[20];
+            snprintf(tval, sizeof(tval), "[%.14s]", app->dicts[app->dict_idx]);
+            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+                                    AlignRight, AlignBottom, tval);
+            break;
         }
-        canvas_draw_str(canvas, 3, y + 8, "Font");
-        char fval[32];
-        snprintf(fval, sizeof(fval), "[%s]", FONT_LABELS[app->font_choice]);
-        canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
-                                AlignRight, AlignBottom, fval);
-        set_fg(canvas, app);
-    }
-
-    // Row: Dark mode
-    {
-        uint8_t row_offset = (app->dict_count > 1) ? 2 : 1;
-        uint8_t y   = BODY_Y + ITEM_H * row_offset;
-        bool    sel = (app->settings_sel == SettingsRowDark);
-        if(sel) {
-            set_fg(canvas, app);
-            canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
-            set_bg(canvas, app);
-        } else {
-            set_fg(canvas, app);
+        case SettingsRowFont: {
+            canvas_draw_str(canvas, 3, y + 8, "Font");
+            char fval[32];
+            snprintf(fval, sizeof(fval), "[%s]", FONT_LABELS[app->font_choice]);
+            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+                                    AlignRight, AlignBottom, fval);
+            break;
         }
-        canvas_draw_str(canvas, 3, y + 8, "Dark Mode");
-        canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
-                                AlignRight, AlignBottom,
-                                app->dark_mode ? "[On]" : "[Off]");
-        set_fg(canvas, app);
-    }
-
-    // Row: Scroll speed
-    {
-        uint8_t row_offset = (app->dict_count > 1) ? 3 : 2;
-        uint8_t y   = BODY_Y + ITEM_H * row_offset;
-        bool    sel = (app->settings_sel == SettingsRowScroll);
-        if(sel) {
-            set_fg(canvas, app);
-            canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
-            set_bg(canvas, app);
-        } else {
-            set_fg(canvas, app);
+        case SettingsRowScroll: {
+            canvas_draw_str(canvas, 3, y + 8, "Scroll Speed");
+            const char* slabel = (app->scroll_speed <= 6)  ? "[Fast]" :
+                                 (app->scroll_speed <= 10) ? "[Normal]" : "[Slow]";
+            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+                                    AlignRight, AlignBottom, slabel);
+            break;
         }
-        canvas_draw_str(canvas, 3, y + 8, "Scroll Speed");
-        const char* slabel = (app->scroll_speed <= 3) ? "[Fast]" :
-                             (app->scroll_speed >= 10) ? "[Slow]" : "[Normal]";
-        canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
-                                AlignRight, AlignBottom, slabel);
+        case SettingsRowDark:
+            canvas_draw_str(canvas, 3, y + 8, "Dark Mode");
+            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+                                    AlignRight, AlignBottom,
+                                    app->dark_mode ? "[On]" : "[Off]");
+            break;
+        default: break;
+        }
+
         set_fg(canvas, app);
     }
-
-    set_fg(canvas, app);
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, SCREEN_W / 2, SCREEN_H - 2,
-                            AlignCenter, AlignBottom,
-                            "OK=Save  Long-OK=List");
 }
 
 // ============================================================
@@ -1503,16 +1503,25 @@ static void on_history(App* app, InputEvent* ev) {
         break;
     case InputKeyOk:
         if(app->hist_count == 0) break;
+        // Switch to the dictionary that was active when this term was searched,
+        // but only if that dictionary is still present on the SD card.
+        if(app->hist_dict[app->hist_sel] < app->dict_count)
+            app->dict_idx = app->hist_dict[app->hist_sel];
         // Fill the search buffer with the selected term and go to keyboard
         strncpy(app->search_buf, app->history[app->hist_sel], MAX_SEARCH_LEN);
         app->search_buf[MAX_SEARCH_LEN] = '\0';
         app->search_len  = (uint8_t)strlen(app->search_buf);
         app->cursor_pos  = app->search_len;
         app->text_scroll = 0;
+        app->kb_back_long_consumed = false;
+        app->prev_view   = ViewHistory;
+        app->search_origin = ViewHistory;
+        app->kb_row      = KB_NROWS;   // special buttons row
+        app->kb_col      = 4;          // GO! button
         app->view = ViewSearch;
         break;
     case InputKeyBack:
-        app->view = ViewMenu;
+        if(ev->type == InputTypeShort) app->view = ViewMenu;
         break;
     default: break;
     }
@@ -1532,8 +1541,8 @@ static void on_history(App* app, InputEvent* ev) {
 static const char* const ABOUT_LINES[] = {
     APP_NAME " v" APP_VERSION,
     "---------------------",
-    "  dict.cc dictionary",
-    "    viewer app.",
+    "  dict.cc & wiktionary",
+    "    dictionary app.",
     "---------------------",
     "SD card setup:",
     "  /ext/apps_data/",
@@ -1760,6 +1769,8 @@ static void on_menu(App* app, InputEvent* ev) {
             app->text_scroll  = 0;
             app->cursor_blink = 0;
             app->bm_naming    = false;
+            app->prev_view    = ViewMenu;
+            app->search_origin = ViewMenu;
             app->view = ViewSearch;
             break;
         case RowFavorites:
@@ -1795,7 +1806,7 @@ static void on_menu(App* app, InputEvent* ev) {
         break;
 
     case InputKeyBack:
-        app->running = false;
+        if(ev->type == InputTypeShort) app->running = false;
         break;
 
     default: break;
@@ -1928,7 +1939,7 @@ static void on_settings(App* app, InputEvent* ev) {
     // When dict_count <= 1 the Dictionary row is hidden; valid rows are Font and Dark only.
     const uint8_t first_row = (app->dict_count > 1) ?
                               (uint8_t)SettingsRowDict : (uint8_t)SettingsRowFont;
-    const uint8_t last_row  = (uint8_t)SettingsRowScroll;
+    const uint8_t last_row  = (uint8_t)SettingsRowDark;
 
     switch(ev->key) {
     case InputKeyUp:
@@ -1950,13 +1961,13 @@ static void on_settings(App* app, InputEvent* ev) {
             app->dark_mode = !app->dark_mode;
             break;
         case SettingsRowScroll:
-            // Cycle: Slow(10) → Normal(6) → Fast(3)
+            // Cycle: Slow(15) → Normal(10) → Fast(6) (Right speeds up, Left slows down)
             if(ev->key == InputKeyRight) {
-                app->scroll_speed = (app->scroll_speed >= 10) ? 6 :
-                                    (app->scroll_speed >= 6)  ? 3 : 10;
+                app->scroll_speed = (app->scroll_speed >= 15) ? 10 :
+                                    (app->scroll_speed >= 10) ? 6  : 15;
             } else {
-                app->scroll_speed = (app->scroll_speed <= 3) ? 6 :
-                                    (app->scroll_speed <= 6) ? 10 : 3;
+                app->scroll_speed = (app->scroll_speed <= 6)  ? 10 :
+                                    (app->scroll_speed <= 10) ? 15 : 6;
             }
             break;
         case SettingsRowFont:

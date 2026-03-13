@@ -297,9 +297,9 @@ void draw_search_results(Canvas* canvas, App* app) {
 
 void on_search(App* app, InputEvent* ev) {
 
-    // Long Back: always exit to menu
+    // Long Back: always exit to previous view
     if(ev->type == InputTypeLong && ev->key == InputKeyBack) {
-        app->view = ViewMenu;
+        app->view = app->prev_view;
         app->kb_back_long_consumed = true;
         return;
     }
@@ -495,7 +495,7 @@ void on_search(App* app, InputEvent* ev) {
             search_buf_backspace(app);
             suggestions_update(app);
         } else {
-            app->view = ViewMenu;
+            app->view = app->prev_view;
         }
         break;
 
@@ -525,7 +525,13 @@ void on_search_results(App* app, InputEvent* ev) {
         open_entry(app);
         break;
     case InputKeyBack:
-        app->view = ViewSearch;
+        // Return to wherever search was originally launched from.
+        // Using search_origin rather than prev_view because open_entry
+        // overwrites prev_view with ViewSearchResults.
+        if(app->search_origin == ViewHistory)
+            app->view = ViewHistory;
+        else
+            app->view = ViewSearch;
         break;
     default: break;
     }

@@ -93,9 +93,8 @@ typedef enum {
 typedef enum {
     SettingsRowDict  = 0,
     SettingsRowFont  = 1,
-    SettingsRowDark  = 2,
-    SettingsRowScroll = 3,
-    SettingsRowCount = 4,
+    SettingsRowScroll = 2,
+    SettingsRowDark  = 3,
 } SettingsRow;
 
 // ============================================================
@@ -117,6 +116,7 @@ typedef struct App {
     bool    running;
     AppView view;
     AppView prev_view;
+    AppView search_origin;  // view that launched the search keyboard (Menu or History)
 
     // Menu state
     MenuRow sel_row;
@@ -191,6 +191,7 @@ typedef struct App {
 
     // Search history
     char    history[MAX_HISTORY][HISTORY_TERM_LEN];
+    uint8_t hist_dict[MAX_HISTORY];  // dict index active when each term was searched
     uint8_t hist_count;
     uint8_t hist_sel;
     uint8_t hist_scroll;
