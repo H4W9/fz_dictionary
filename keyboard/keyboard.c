@@ -481,7 +481,18 @@ void on_search(App* app, InputEvent* ev) {
                     view_port_update(app->view_port);
                     do_search(app);
                     history_add(app);
-                    app->view = ViewSearchResults;
+                    // If Back was pressed during the blocking search, honour it:
+                    // skip the results screen and return to where we came from.
+                    InputEvent pending;
+                    bool back_during_load =
+                        (furi_message_queue_get(app->queue, &pending, 0) == FuriStatusOk) &&
+                        (pending.key == InputKeyBack);
+                    if(back_during_load) {
+                        app->view = (app->search_origin == ViewHistory)
+                                    ? ViewHistory : ViewMenu;
+                    } else {
+                        app->view = ViewSearchResults;
+                    }
                 }
                 break;
             }
@@ -491,7 +502,9 @@ void on_search(App* app, InputEvent* ev) {
     // ── Back: backspace at cursor, or exit ───────────────────────────────────
     case InputKeyBack:
         if(app->kb_back_long_consumed) break;
-        if(app->search_len > 0) {
+        // When launched from History the buffer is pre-filled; exit immediately
+        // rather than forcing the user to backspace through the whole term.
+        if(app->search_len > 0 && app->search_origin != ViewHistory) {
             search_buf_backspace(app);
             suggestions_update(app);
         } else {
