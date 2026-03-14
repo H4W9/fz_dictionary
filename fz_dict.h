@@ -91,10 +91,11 @@ typedef enum {
 } FontChoice;
 
 typedef enum {
-    SettingsRowDict  = 0,
-    SettingsRowFont  = 1,
-    SettingsRowScroll = 2,
-    SettingsRowDark  = 3,
+    SettingsRowDict      = 0,
+    SettingsRowFont      = 1,
+    SettingsRowScroll    = 2,
+    SettingsRowPrecision = 3,
+    SettingsRowDark      = 4,
 } SettingsRow;
 
 // ============================================================
@@ -207,6 +208,11 @@ typedef struct App {
     bool        settings_dict_open;
     bool        settings_long_consumed;
     uint8_t     scroll_speed;   // marquee step_frames: 3=Fast, 6=Normal, 10=Slow
+    bool        search_startswith; // true = only match words that start with the query
+
+    // Search progress (0-100): updated each chunk inside do_search so the
+    // loading screen can render a filled bar and percentage.
+    uint8_t search_progress;
 
 } App;
 

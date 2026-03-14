@@ -90,21 +90,23 @@ static void settings_save(App* app) {
     }
     char buf[128];
     int len = snprintf(buf, sizeof(buf),
-        "font=%d\ndark=%d\ndict=%d\nspeed=%d\n",
+        "font=%d\ndark=%d\ndict=%d\nspeed=%d\nprecision=%d\n",
         (int)app->font_choice,
         (int)app->dark_mode,
         (int)app->dict_idx,
-        (int)app->scroll_speed);
+        (int)app->scroll_speed,
+        (int)app->search_startswith);
     if(len > 0) storage_file_write(f, buf, (uint16_t)len);
     storage_file_close(f);
     storage_file_free(f);
 }
 
 static void settings_load(App* app) {
-    app->font_choice  = FontSecondaryBuiltin;
-    app->dark_mode    = false;
-    app->dict_idx     = 0;
-    app->scroll_speed = 6;
+    app->font_choice       = FontSecondaryBuiltin;
+    app->dark_mode         = false;
+    app->dict_idx          = 0;
+    app->scroll_speed      = 6;
+    app->search_startswith = false;
 
     File* f = storage_file_alloc(app->storage);
     if(!storage_file_open(f, SETTINGS_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
@@ -118,10 +120,11 @@ static void settings_load(App* app) {
     storage_file_free(f);
 
     char* p;
-    if((p = strstr(buf, "font="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<FONT_COUNT) app->font_choice=(FontChoice)v; }
-    if((p = strstr(buf, "dark="))  != NULL) { app->dark_mode = (atoi(p+5) != 0); }
-    if((p = strstr(buf, "dict="))  != NULL) { int v = atoi(p+5); if(v>=0&&v<MAX_DICTS) app->dict_idx=(uint8_t)v; }
-    if((p = strstr(buf, "speed=")) != NULL) { int v = atoi(p+6); if(v>0&&v<=30) app->scroll_speed=(uint8_t)v; }
+    if((p = strstr(buf, "font="))      != NULL) { int v = atoi(p+5); if(v>=0&&v<FONT_COUNT) app->font_choice=(FontChoice)v; }
+    if((p = strstr(buf, "dark="))      != NULL) { app->dark_mode = (atoi(p+5) != 0); }
+    if((p = strstr(buf, "dict="))      != NULL) { int v = atoi(p+5); if(v>=0&&v<MAX_DICTS) app->dict_idx=(uint8_t)v; }
+    if((p = strstr(buf, "speed="))     != NULL) { int v = atoi(p+6); if(v>0&&v<=30) app->scroll_speed=(uint8_t)v; }
+    if((p = strstr(buf, "precision=")) != NULL) { app->search_startswith = (atoi(p+10) != 0); }
 }
 
 // ============================================================
@@ -498,6 +501,20 @@ static bool icontains_ascii(const char* hay, const char* needle) {
     return false;
 }
 
+// Case-insensitive starts-with: returns true if hay begins with needle.
+static bool istartswith_ascii(const char* hay, const char* needle) {
+    if(!hay || !needle || !needle[0]) return false;
+    size_t nlen = strlen(needle);
+    for(size_t j = 0; j < nlen; j++) {
+        if(!hay[j]) return false;
+        char a = hay[j], b = needle[j];
+        if(a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if(b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if(a != b) return false;
+    }
+    return true;
+}
+
 // Truncate a display string to max_chars visible characters (UTF-8 aware)
 void truncate_utf8_display(const char* src, char* dst, size_t dst_size, uint8_t max_chars) {
     size_t si = 0, di = 0;
@@ -527,7 +544,11 @@ static void process_search_line(App* app, const char* line, uint32_t offset) {
     memcpy(source, line, src_len);
     source[src_len] = '\0';
 
-    if(!icontains_ascii(source, app->search_buf)) return;
+    if(app->search_startswith) {
+        if(!istartswith_ascii(source, app->search_buf)) return;
+    } else {
+        if(!icontains_ascii(source, app->search_buf)) return;
+    }
 
     uint8_t hi = app->hit_count;
     app->hits[hi].file_offset = offset;
@@ -554,10 +575,11 @@ static void process_search_line(App* app, const char* line, uint32_t offset) {
 }
 
 void do_search(App* app) {
-    app->hit_count  = 0;
-    app->hit_sel    = 0;
-    app->hit_scroll = 0;
-    app->list_tick  = 0;
+    app->hit_count      = 0;
+    app->hit_sel        = 0;
+    app->hit_scroll     = 0;
+    app->list_tick      = 0;
+    app->search_progress = 0;
 
     if(!app->search_len || app->dict_count == 0) return;
 
@@ -572,6 +594,9 @@ void do_search(App* app) {
         storage_file_free(f);
         return;
     }
+
+    // Get file size so we can track position-based progress alongside hit-count progress.
+    uint64_t file_size = storage_file_size(f);
 
     char chunk[SEARCH_CHUNK_SIZE];
     char line_buf[LINE_BUF_LEN];
@@ -606,6 +631,15 @@ void do_search(App* app) {
             }
         }
 
+        // Use whichever metric is further along:
+        // - file position covers rare words that exhaust the file before hitting MAX_SEARCH_HITS
+        // - hit count covers common words that hit MAX_SEARCH_HITS early in the file
+        uint8_t by_pos  = (file_size > 0) ?
+                          (uint8_t)((uint64_t)file_offset * 100 / file_size) : 0;
+        uint8_t by_hits = (uint8_t)((uint16_t)app->hit_count * 100 / MAX_SEARCH_HITS);
+        app->search_progress = (by_pos > by_hits) ? by_pos : by_hits;
+        view_port_update(app->view_port);
+
         if(rd < SEARCH_CHUNK_SIZE) {
             if(lpos > 0 && app->hit_count < MAX_SEARCH_HITS) {
                 line_buf[lpos] = '\0';
@@ -615,6 +649,10 @@ void do_search(App* app) {
             break;
         }
     }
+
+    // Always finish at 100% regardless of how many hits were found.
+    app->search_progress = 100;
+    view_port_update(app->view_port);
 
     storage_file_close(f);
     storage_file_free(f);
@@ -1107,21 +1145,35 @@ static void draw_settings(Canvas* canvas, App* app) {
 
     // -- Collapsed view --
     // Build ordered list of visible rows (Dict only shown with multiple dicts).
-    SettingsRow rows[4];
+    SettingsRow rows[5];
     uint8_t total = 0;
     if(app->dict_count > 1)    rows[total++] = SettingsRowDict;
     rows[total++] = SettingsRowFont;
     rows[total++] = SettingsRowScroll;
+    rows[total++] = SettingsRowPrecision;
     rows[total++] = SettingsRowDark;
 
-    for(uint8_t i = 0; i < total; i++) {
-        SettingsRow row = rows[i];
+    // Find the selected row's index so we can compute a scroll offset.
+    uint8_t sel_idx = 0;
+    for(uint8_t i = 0; i < total; i++)
+        if(rows[i] == app->settings_sel) { sel_idx = i; break; }
+
+    // Scroll offset: keep selected row within the visible window.
+    uint8_t scroll = 0;
+    if(sel_idx >= VIS) scroll = (uint8_t)(sel_idx - VIS + 1);
+
+    // When the scrollbar is visible, pull value labels left so they don't overlap it.
+    uint8_t val_x = (total > VIS) ? (uint8_t)(SB_X - 2) : (uint8_t)(SCREEN_W - 2);
+
+    for(uint8_t i = 0; i < VIS && (scroll + i) < total; i++) {
+        SettingsRow row = rows[scroll + i];
         uint8_t y   = BODY_Y + ITEM_H * i;
         bool    sel = (row == app->settings_sel);
 
         if(sel) {
             set_fg(canvas, app);
-            canvas_draw_box(canvas, 0, y, SCREEN_W, ITEM_H);
+            uint8_t box_w = (total > VIS) ? SB_X - 1 : SCREEN_W;
+            canvas_draw_box(canvas, 0, y, box_w, ITEM_H);
             set_bg(canvas, app);
         } else {
             set_fg(canvas, app);
@@ -1132,7 +1184,7 @@ static void draw_settings(Canvas* canvas, App* app) {
             canvas_draw_str(canvas, 3, y + 8, "Dictionary");
             char tval[20];
             snprintf(tval, sizeof(tval), "[%.14s]", app->dicts[app->dict_idx]);
-            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+            canvas_draw_str_aligned(canvas, val_x, y + 8,
                                     AlignRight, AlignBottom, tval);
             break;
         }
@@ -1140,7 +1192,7 @@ static void draw_settings(Canvas* canvas, App* app) {
             canvas_draw_str(canvas, 3, y + 8, "Font");
             char fval[32];
             snprintf(fval, sizeof(fval), "[%s]", FONT_LABELS[app->font_choice]);
-            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+            canvas_draw_str_aligned(canvas, val_x, y + 8,
                                     AlignRight, AlignBottom, fval);
             break;
         }
@@ -1148,21 +1200,30 @@ static void draw_settings(Canvas* canvas, App* app) {
             canvas_draw_str(canvas, 3, y + 8, "Scroll Speed");
             const char* slabel = (app->scroll_speed <= 6)  ? "[Fast]" :
                                  (app->scroll_speed <= 10) ? "[Normal]" : "[Slow]";
-            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+            canvas_draw_str_aligned(canvas, val_x, y + 8,
                                     AlignRight, AlignBottom, slabel);
             break;
         }
         case SettingsRowDark:
             canvas_draw_str(canvas, 3, y + 8, "Dark Mode");
-            canvas_draw_str_aligned(canvas, SCREEN_W - 2, y + 8,
+            canvas_draw_str_aligned(canvas, val_x, y + 8,
                                     AlignRight, AlignBottom,
                                     app->dark_mode ? "[On]" : "[Off]");
+            break;
+        case SettingsRowPrecision:
+            canvas_draw_str(canvas, 3, y + 8, "Precision");
+            canvas_draw_str_aligned(canvas, val_x, y + 8,
+                                    AlignRight, AlignBottom,
+                                    app->search_startswith ? "[Starts]" : "[Contains]");
             break;
         default: break;
         }
 
         set_fg(canvas, app);
     }
+
+    if(total > VIS)
+        draw_scrollbar(canvas, app, scroll, total, VIS);
 }
 
 // ============================================================
@@ -1657,8 +1718,28 @@ static void draw_loading(Canvas* canvas, App* app) {
     draw_hdr(canvas, "Searching...");
     set_fg(canvas, app);
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, SCREEN_W / 2, SCREEN_H / 2,
+    canvas_draw_str_aligned(canvas, SCREEN_W / 2, SCREEN_H / 2 - 8,
                             AlignCenter, AlignCenter, "Please wait...");
+
+    // Progress bar
+    const uint8_t bar_x = 8;
+    const uint8_t bar_y = SCREEN_H / 2 + 4;
+    const uint8_t bar_w = SCREEN_W - 16;
+    const uint8_t bar_h = 8;
+    uint8_t fill_w = (uint8_t)((uint16_t)bar_w * app->search_progress / 100);
+
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_frame(canvas, bar_x, bar_y, bar_w, bar_h);
+    if(fill_w > 0)
+        canvas_draw_box(canvas, bar_x, bar_y, fill_w, bar_h);
+
+    // Percentage label
+    char pct[5];
+    snprintf(pct, sizeof(pct), "%d%%", (int)app->search_progress);
+    set_fg(canvas, app);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, SCREEN_W / 2, bar_y + bar_h + 9,
+                            AlignCenter, AlignCenter, pct);
 }
 
 // ============================================================
@@ -1983,6 +2064,9 @@ static void on_settings(App* app, InputEvent* ev) {
                 else
                     app->dict_idx = (app->dict_idx + app->dict_count - 1) % app->dict_count;
             }
+            break;
+        case SettingsRowPrecision:
+            app->search_startswith = !app->search_startswith;
             break;
         default: break;
         }
