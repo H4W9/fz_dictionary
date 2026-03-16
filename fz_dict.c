@@ -426,10 +426,17 @@ void keywords_load(App* app) {
 
 static bool kw_prefix_match(const char* word, const char* prefix, uint8_t plen) {
     for(uint8_t i = 0; i < plen; i++) {
-        char a = word[i], b = prefix[i];
+        uint8_t a = (uint8_t)word[i], b = (uint8_t)prefix[i];
         if(!a) return false;
-        if(a >= 'A' && a <= 'Z') a = (char)(a + 32);
-        if(b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        // ASCII case fold
+        if(a >= 'A' && a <= 'Z') a = (uint8_t)(a + 32);
+        if(b >= 'A' && b <= 'Z') b = (uint8_t)(b + 32);
+        // UTF-8 umlaut case fold (Ä/ä 0x84, Ö/ö 0x96, Ü/ü 0x9C → +0x20)
+        if(i > 0 &&
+           (uint8_t)word[i-1] == 0xC3 && (uint8_t)prefix[i-1] == 0xC3) {
+            if(a == 0x84 || a == 0x96 || a == 0x9C) a = (uint8_t)(a + 0x20);
+            if(b == 0x84 || b == 0x96 || b == 0x9C) b = (uint8_t)(b + 0x20);
+        }
         if(a != b) return false;
     }
     return true;
@@ -482,7 +489,7 @@ void suggestion_fill(App* app) {
 // Dictionary search (chunked streaming)
 // ============================================================
 
-// Case-insensitive substring match (handles ASCII; UTF-8 works for byte identity)
+// Case-insensitive substring match (ASCII + UTF-8 umlaut pairs Ä/ä Ö/ö Ü/ü)
 static bool icontains_ascii(const char* hay, const char* needle) {
     if(!hay || !needle || !needle[0]) return false;
     size_t nlen = strlen(needle);
@@ -491,9 +498,19 @@ static bool icontains_ascii(const char* hay, const char* needle) {
     for(size_t i = 0; i <= hlen - nlen; i++) {
         bool ok = true;
         for(size_t j = 0; j < nlen; j++) {
-            char a = hay[i+j], b = needle[j];
-            if(a >= 'A' && a <= 'Z') a = (char)(a + 32);
-            if(b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            uint8_t a = (uint8_t)hay[i+j], b = (uint8_t)needle[j];
+            // ASCII case fold
+            if(a >= 'A' && a <= 'Z') a = (uint8_t)(a + 32);
+            if(b >= 'A' && b <= 'Z') b = (uint8_t)(b + 32);
+            // UTF-8 umlaut case fold:
+            //   Ä 0xC3 0x84 → ä 0xC3 0xA4   (+0x20)
+            //   Ö 0xC3 0x96 → ö 0xC3 0xB6   (+0x20)
+            //   Ü 0xC3 0x9C → ü 0xC3 0xBC   (+0x20)
+            if(j > 0 &&
+               (uint8_t)hay[i+j-1] == 0xC3 && (uint8_t)needle[j-1] == 0xC3) {
+                if(a == 0x84 || a == 0x96 || a == 0x9C) a = (uint8_t)(a + 0x20);
+                if(b == 0x84 || b == 0x96 || b == 0x9C) b = (uint8_t)(b + 0x20);
+            }
             if(a != b) { ok = false; break; }
         }
         if(ok) return true;
@@ -501,15 +518,22 @@ static bool icontains_ascii(const char* hay, const char* needle) {
     return false;
 }
 
-// Case-insensitive starts-with: returns true if hay begins with needle.
+// Case-insensitive starts-with (ASCII + UTF-8 umlaut pairs Ä/ä Ö/ö Ü/ü)
 static bool istartswith_ascii(const char* hay, const char* needle) {
     if(!hay || !needle || !needle[0]) return false;
     size_t nlen = strlen(needle);
     for(size_t j = 0; j < nlen; j++) {
         if(!hay[j]) return false;
-        char a = hay[j], b = needle[j];
-        if(a >= 'A' && a <= 'Z') a = (char)(a + 32);
-        if(b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        uint8_t a = (uint8_t)hay[j], b = (uint8_t)needle[j];
+        // ASCII case fold
+        if(a >= 'A' && a <= 'Z') a = (uint8_t)(a + 32);
+        if(b >= 'A' && b <= 'Z') b = (uint8_t)(b + 32);
+        // UTF-8 umlaut case fold (Ä/ä 0x84, Ö/ö 0x96, Ü/ü 0x9C → +0x20)
+        if(j > 0 &&
+           (uint8_t)hay[j-1] == 0xC3 && (uint8_t)needle[j-1] == 0xC3) {
+            if(a == 0x84 || a == 0x96 || a == 0x9C) a = (uint8_t)(a + 0x20);
+            if(b == 0x84 || b == 0x96 || b == 0x9C) b = (uint8_t)(b + 0x20);
+        }
         if(a != b) return false;
     }
     return true;
